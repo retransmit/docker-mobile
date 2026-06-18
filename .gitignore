@@ -1,0 +1,53 @@
+# === Secrets / credentials (NEVER commit) ===
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+.env
+.env.*
+*credentials*
+*.token
+
+# === Flutter / Dart (app/) ===
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.pub-cache/
+.pub/
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework/
+app/ios/Flutter/Flutter.podspec
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+**/*.iml
+
+# === Go (agent/) ===
+agent/bin/
+agent/vendor/
+*.test
+*.out
+
+# === Build artifacts ===
+*.exe
+*.dll
+*.so
+*.dylib
+
+# === OS / editor ===
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# === Logs ===
+*.log
