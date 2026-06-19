@@ -1,12 +1,15 @@
 /// A Docker container as returned by `GET /containers/json`.
-class Container {
+///
+/// Named `DockerContainer` (not `Container`) to avoid colliding with Flutter's
+/// ubiquitous `Container` widget in any file that imports both.
+class DockerContainer {
   final String id;
   final List<String> names;
   final String image;
   final String state;
   final String status;
 
-  const Container({
+  const DockerContainer({
     required this.id,
     required this.names,
     required this.image,
@@ -14,8 +17,8 @@ class Container {
     required this.status,
   });
 
-  factory Container.fromJson(Map<String, dynamic> json) {
-    return Container(
+  factory DockerContainer.fromJson(Map<String, dynamic> json) {
+    return DockerContainer(
       id: json['Id'] as String,
       names: (json['Names'] as List?)?.cast<String>() ?? const [],
       image: json['Image'] as String? ?? '',

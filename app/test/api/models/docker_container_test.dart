@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:docker_mobile/src/api/models/container.dart';
+import 'package:docker_mobile/src/api/models/docker_container.dart';
 
 void main() {
   test('parses a /containers/json element', () {
@@ -10,7 +10,7 @@ void main() {
       'State': 'running',
       'Status': 'Up 2 hours',
     };
-    final c = Container.fromJson(json);
+    final c = DockerContainer.fromJson(json);
     expect(c.id, 'abc123');
     expect(c.names, ['/web']);
     expect(c.image, 'nginx:latest');
@@ -19,7 +19,7 @@ void main() {
   });
 
   test('tolerates missing optional fields', () {
-    final c = Container.fromJson({'Id': 'x', 'Names': <String>[], 'Image': 'busybox'});
+    final c = DockerContainer.fromJson({'Id': 'x', 'Names': <String>[], 'Image': 'busybox'});
     expect(c.state, '');
     expect(c.status, '');
   });
