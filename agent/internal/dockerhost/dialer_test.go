@@ -2,7 +2,6 @@ package dockerhost
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -40,7 +39,6 @@ func TestDialContextForUnixBaseURL(t *testing.T) {
 	if dial == nil {
 		t.Fatal("dial is nil")
 	}
-	_ = net.Conn(nil)
 }
 
 func TestDialContextForUnknownScheme(t *testing.T) {

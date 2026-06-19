@@ -25,22 +25,57 @@ func TestRequireTokenAllows(t *testing.T) {
 }
 
 func TestRequireTokenRejectsMissing(t *testing.T) {
-	h := RequireToken("secret", okHandler())
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	h := RequireToken("secret", next)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code = %d, want 401", rec.Code)
 	}
+	if called {
+		t.Fatal("next handler was invoked, want not invoked")
+	}
 }
 
 func TestRequireTokenRejectsWrong(t *testing.T) {
-	h := RequireToken("secret", okHandler())
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	h := RequireToken("secret", next)
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer nope")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	if called {
+		t.Fatal("next handler was invoked, want not invoked")
+	}
+}
+
+func TestRequireTokenEmptyTokenRejectsAll(t *testing.T) {
+	called := false
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+	h := RequireToken("", next)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer ")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", rec.Code)
+	}
+	if called {
+		t.Fatal("next handler was invoked, want not invoked")
 	}
 }

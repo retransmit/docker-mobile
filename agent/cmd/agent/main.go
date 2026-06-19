@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/0xLennox07/docker-mobile/agent/internal/config"
 	"github.com/0xLennox07/docker-mobile/agent/internal/server"
@@ -20,7 +21,8 @@ func main() {
 		log.Fatalf("server: %v", err)
 	}
 	log.Printf("docker-mobile-agent listening on %s (docker host: %s)", cfg.ListenAddr, cfg.DockerHost)
-	if err := http.ListenAndServe(cfg.ListenAddr, h); err != nil {
+	srv := &http.Server{Addr: cfg.ListenAddr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("listen: %v", err)
 	}
 }
