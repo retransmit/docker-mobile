@@ -27,8 +27,16 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
   }
 
   void _connect() {
-    final scheme = _useTls ? 'https' : 'http';
-    final baseUri = Uri.parse('$scheme://${_host.text}:${_port.text}');
+    final host = _host.text.trim();
+    final port = int.tryParse(_port.text.trim());
+    if (host.isEmpty || port == null || port < 1 || port > 65535) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid host and port (1-65535).')),
+      );
+      return;
+    }
+    // Build the URI from validated parts (no Uri.parse on raw input).
+    final baseUri = Uri(scheme: _useTls ? 'https' : 'http', host: host, port: port);
     ref.read(transportProvider.notifier).state =
         AgentTransport(baseUri: baseUri, token: _token.text);
     Navigator.of(context).push(
@@ -45,7 +53,11 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
         child: Column(
           children: [
             TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
-            TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port')),
+            TextField(
+              controller: _port,
+              decoration: const InputDecoration(labelText: 'Port'),
+              keyboardType: TextInputType.number,
+            ),
             TextField(
               controller: _token,
               decoration: const InputDecoration(labelText: 'Token'),
