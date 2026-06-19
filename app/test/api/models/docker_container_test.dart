@@ -18,9 +18,19 @@ void main() {
     expect(c.status, 'Up 2 hours');
   });
 
-  test('tolerates missing optional fields', () {
-    final c = DockerContainer.fromJson({'Id': 'x', 'Names': <String>[], 'Image': 'busybox'});
+  test('defaults all optional fields when absent', () {
+    // Only Id present — exercises the ?? [] / ?? '' fallbacks.
+    final c = DockerContainer.fromJson({'Id': 'x'});
+    expect(c.names, isEmpty);
+    expect(c.image, '');
     expect(c.state, '');
     expect(c.status, '');
+  });
+
+  test('throws when the required Id is missing', () {
+    expect(
+      () => DockerContainer.fromJson({'Image': 'busybox'}),
+      throwsA(isA<TypeError>()),
+    );
   });
 }
