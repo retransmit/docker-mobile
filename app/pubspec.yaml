@@ -39,6 +39,7 @@ dependencies:
   http: ^1.2.0
   # App state management.
   flutter_riverpod: ^2.5.1
+  share_plus: ^13.1.0
 
 dev_dependencies:
   flutter_test:
