@@ -21,6 +21,10 @@ func New(dockerHost string) (http.Handler, error) {
 	}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.Transport = &http.Transport{DialContext: dial}
+	// Flush each chunk to the client immediately so live streams (logs/stats/
+	// events) are real-time. ReverseProxy already does this for unknown-length
+	// responses; setting it explicitly guarantees it regardless of headers.
+	rp.FlushInterval = -1
 	// NewSingleHostReverseProxy rewrites scheme+host to target; ensure the
 	// outbound Host header matches so the daemon accepts it.
 	origDirector := rp.Director

@@ -59,3 +59,48 @@ func TestProxyForwardsPing(t *testing.T) {
 		t.Fatalf("ping not proxied: code=%d apiver=%q", rec.Code, rec.Header().Get("Api-Version"))
 	}
 }
+
+func TestProxyStreamsIncrementally(t *testing.T) {
+	release := make(chan struct{})
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fl, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("ResponseWriter is not a Flusher")
+			return
+		}
+		io.WriteString(w, "first\n")
+		fl.Flush()
+		<-release // block until the test has read the first chunk
+		io.WriteString(w, "second\n")
+		fl.Flush()
+	}))
+	defer daemon.Close()
+
+	h, err := New("tcp://" + daemon.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// A real server is needed because httptest.ResponseRecorder does not stream.
+	front := httptest.NewServer(h)
+	defer front.Close()
+
+	resp, err := http.Get(front.URL + "/containers/x/logs?follow=1")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The first chunk must arrive BEFORE the handler is released — proving no buffering.
+	buf := make([]byte, len("first\n"))
+	if _, err := io.ReadFull(resp.Body, buf); err != nil {
+		t.Fatalf("read first chunk: %v", err)
+	}
+	if string(buf) != "first\n" {
+		t.Fatalf("first chunk = %q, want %q", buf, "first\n")
+	}
+	close(release)
+	rest, _ := io.ReadAll(resp.Body)
+	if string(rest) != "second\n" {
+		t.Fatalf("rest = %q, want %q", rest, "second\n")
+	}
+}
