@@ -15,6 +15,10 @@ class _FakeTransport implements Transport {
     lastQuery = query;
     return response;
   }
+
+  @override
+  Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
+      throw UnimplementedError();
 }
 
 void main() {
