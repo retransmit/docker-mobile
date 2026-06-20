@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'logs_screen.dart';
 
 class ContainersScreen extends ConsumerWidget {
   const ContainersScreen({super.key});
@@ -34,6 +35,11 @@ class ContainersScreen extends ConsumerWidget {
               ),
               title: Text(name),
               subtitle: Text('${c.image} · ${c.status}'),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => LogsScreen(containerId: c.id, containerName: name),
+                ),
+              ),
             );
           },
         ),
