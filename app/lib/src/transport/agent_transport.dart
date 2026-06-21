@@ -32,6 +32,17 @@ class AgentTransport implements Transport {
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
 
+    // close() is invoked both by the body's onDone and by onCancel (which the
+    // SDK fires when the done event is delivered downstream); guard so an
+    // arbitrary http.Client is never closed twice.
+    var clientClosed = false;
+    void closeClient() {
+      if (!clientClosed) {
+        clientClosed = true;
+        client.close();
+      }
+    }
+
     controller.onListen = () async {
       try {
         final request = http.Request('GET', uri)
@@ -41,7 +52,7 @@ class AgentTransport implements Transport {
           final body = await response.stream.bytesToString();
           controller.addError(TransportException(response.statusCode, body));
           await controller.close();
-          client.close();
+          closeClient();
           return;
         }
         sub = response.stream.listen(
@@ -49,19 +60,19 @@ class AgentTransport implements Transport {
           onError: controller.addError,
           onDone: () async {
             await controller.close();
-            client.close();
+            closeClient();
           },
           cancelOnError: true,
         );
       } catch (e) {
         controller.addError(e);
         await controller.close();
-        client.close();
+        closeClient();
       }
     };
     controller.onCancel = () async {
       await sub?.cancel();
-      client.close(); // aborts the in-flight request
+      closeClient(); // aborts the in-flight request
     };
     return controller.stream;
   }

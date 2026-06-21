@@ -1,5 +1,10 @@
 import 'dart:typed_data';
 
+/// Upper bound on a single stdcopy frame's declared payload length. A header
+/// claiming more than this is treated as malformed, so a corrupt length can't
+/// make the decoder buffer unboundedly while "waiting for more bytes".
+const int _maxFrameLen = 64 * 1024 * 1024;
+
 enum LogStream { stdout, stderr }
 
 class LogChunk {
@@ -33,6 +38,12 @@ Stream<LogChunk> decodeStdcopy(Stream<List<int>> input) async* {
           (acc[offset + 5] << 16) |
           (acc[offset + 6] << 8) |
           acc[offset + 7];
+      if (len > _maxFrameLen) {
+        // Implausible length => corrupt header; surface the rest and stop.
+        yield LogChunk(LogStream.stderr, acc.sublist(offset));
+        offset = acc.length;
+        break;
+      }
       if (acc.length - offset - 8 < len) break; // need more bytes
       final payload = acc.sublist(offset + 8, offset + 8 + len);
       yield LogChunk(type == 2 ? LogStream.stderr : LogStream.stdout, payload);
