@@ -11,7 +11,7 @@ import 'providers.dart';
 
 const int kLogBufferCap = 5000;
 
-enum LogsStatus { streaming, idle, error }
+enum LogsStatus { streaming, paused, idle, error }
 
 class LogsState {
   final List<LogLine> lines;
@@ -121,9 +121,18 @@ class LogsNotifier extends StateNotifier<LogsState> {
     }
   }
 
+  /// Pause = stop the live tail but KEEP the buffered lines (freeze).
+  /// Resume = restart streaming live.
   void setFollowing(bool value) {
-    state = state.copyWith(following: value);
-    _start();
+    if (value == state.following) return;
+    if (value) {
+      state = state.copyWith(following: true);
+      _start();
+    } else {
+      _sub?.cancel();
+      _sub = null;
+      state = state.copyWith(following: false, status: LogsStatus.paused);
+    }
   }
 
   void setTimestamps(bool value) {
