@@ -86,7 +86,11 @@ func NewHandler(dockerHost string) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	// Default CheckOrigin enforces same-origin when an Origin header is present
+	// and allows it when absent (the native-app client sends none). The exec
+	// session is also gated by bearer-token auth (RequireToken), so this is
+	// defense-in-depth against a browser client, not the primary control.
+	upgrader := websocket.Upgrader{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("id")
 		ws, err := upgrader.Upgrade(w, r, nil)
