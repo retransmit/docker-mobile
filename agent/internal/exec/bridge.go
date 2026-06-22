@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/0xLennox07/docker-mobile/agent/internal/dockerhost"
+	"github.com/gorilla/websocket"
 )
 
 // startExecHijack dials the Docker daemon and starts the given exec with a TTY,
@@ -75,3 +78,65 @@ type bufferedConn struct {
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// NewHandler returns a handler that upgrades the request to a WebSocket and
+// bridges it to a hijacked exec stream on the daemon at dockerHost.
+func NewHandler(dockerHost string) (http.Handler, error) {
+	dial, _, err := dockerhost.DialContextFor(dockerHost)
+	if err != nil {
+		return nil, err
+	}
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		execID := r.PathValue("id")
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return // Upgrade already wrote an error response
+		}
+		defer ws.Close()
+		conn, err := startExecHijack(r.Context(), dial, execID)
+		if err != nil {
+			ws.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "exec start failed"),
+				time.Now().Add(time.Second),
+			)
+			return
+		}
+		defer conn.Close()
+		bridge(ws, conn)
+	}), nil
+}
+
+// bridge copies bytes between the WebSocket (stdin) and the conn (stdout) until
+// either side ends, then tears down both directions.
+func bridge(ws *websocket.Conn, conn net.Conn) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, 32*1024)
+		for {
+			n, err := conn.Read(buf)
+			if n > 0 {
+				if werr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					break
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		ws.Close() // unblock the reader below
+	}()
+	for {
+		_, data, err := ws.ReadMessage()
+		if err != nil {
+			break
+		}
+		if _, werr := conn.Write(data); werr != nil {
+			break
+		}
+	}
+	conn.Close()
+	<-done
+}
