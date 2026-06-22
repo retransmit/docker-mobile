@@ -24,6 +24,7 @@ class ExecSessionController extends ChangeNotifier {
   ExecChannel? _channel;
   StreamSubscription<List<int>>? _outputSub;
   String? _execId;
+  bool _disposed = false;
   ExecStatus status = ExecStatus.connecting;
   int? exitCode;
   String command = ''; // empty => default bash/sh chooser
@@ -45,10 +46,19 @@ class ExecSessionController extends ChangeNotifier {
   Future<void> _start() async {
     status = ExecStatus.connecting;
     exitCode = null;
+    _execId = null;
     notifyListeners();
     try {
-      _execId = await client.createExec(containerId, cmd: _cmd, tty: true);
-      final ch = await client.attachExec(_execId!, cols: terminal.viewWidth, rows: terminal.viewHeight);
+      final id = await client.createExec(containerId, cmd: _cmd, tty: true);
+      final ch = await client.attachExec(id, cols: terminal.viewWidth, rows: terminal.viewHeight);
+      // If we were disposed while the handshake was in flight, tear down the
+      // freshly-resolved channel instead of leaking the hijacked agent conn,
+      // and never notify listeners after super.dispose().
+      if (_disposed) {
+        unawaited(ch.close());
+        return;
+      }
+      _execId = id;
       _channel = ch;
       status = ExecStatus.connected;
       notifyListeners();
@@ -58,12 +68,14 @@ class ExecSessionController extends ChangeNotifier {
         onError: (_) => _onEnded(),
       );
     } catch (_) {
+      if (_disposed) return;
       status = ExecStatus.error;
       notifyListeners();
     }
   }
 
   Future<void> _onEnded() async {
+    if (_disposed) return;
     status = ExecStatus.ended;
     final id = _execId;
     if (id != null) {
@@ -71,6 +83,7 @@ class ExecSessionController extends ChangeNotifier {
         exitCode = (await client.inspectExec(id)).exitCode;
       } catch (_) {/* leave exitCode null */}
     }
+    if (_disposed) return;
     notifyListeners();
   }
 
@@ -83,6 +96,7 @@ class ExecSessionController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _outputSub?.cancel();
     _channel?.close();
     super.dispose();
