@@ -22,6 +22,15 @@ class _FakeTransport implements Transport {
     lastStreamQuery = query;
     return Stream.fromIterable(streamChunks);
   }
+
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
 }
 
 List<int> frame(int type, List<int> payload) {

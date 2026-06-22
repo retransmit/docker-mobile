@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/io.dart';
 
 import 'transport.dart';
 
@@ -76,4 +78,45 @@ class AgentTransport implements Transport {
     };
     return controller.stream;
   }
+
+  @override
+  Future<http.Response> post(String path,
+      {Map<String, String>? query, Object? body, Map<String, String>? headers}) {
+    final uri = baseUri.replace(path: path, queryParameters: query);
+    final h = <String, String>{'Authorization': 'Bearer $token', ...?headers};
+    String? encoded;
+    if (body != null) {
+      encoded = body is String ? body : jsonEncode(body);
+      h['Content-Type'] = 'application/json';
+    }
+    return _client.post(uri, headers: h, body: encoded);
+  }
+
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
+    final wsScheme = baseUri.scheme == 'https' ? 'wss' : 'ws';
+    final uri = baseUri.replace(
+      scheme: wsScheme,
+      path: '/exec/$execId/ws',
+      queryParameters: {'w': '$cols', 'h': '$rows'},
+    );
+    final channel = IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $token'});
+    await channel.ready;
+    return _WebSocketExecChannel(channel);
+  }
+}
+
+class _WebSocketExecChannel implements ExecChannel {
+  final IOWebSocketChannel _channel;
+  _WebSocketExecChannel(this._channel);
+
+  @override
+  Stream<List<int>> get output =>
+      _channel.stream.map((e) => e is String ? utf8.encode(e) : e as List<int>);
+
+  @override
+  void send(List<int> data) => _channel.sink.add(data);
+
+  @override
+  Future<void> close() => _channel.sink.close();
 }
