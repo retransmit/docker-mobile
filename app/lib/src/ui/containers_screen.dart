@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'exec_screen.dart';
 import 'logs_screen.dart';
 
 class ContainersScreen extends ConsumerWidget {
@@ -35,6 +36,15 @@ class ContainersScreen extends ConsumerWidget {
               ),
               title: Text(name),
               subtitle: Text('${c.image} · ${c.status}'),
+              trailing: IconButton(
+                tooltip: 'Exec',
+                icon: const Icon(Icons.terminal),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => ExecScreen(containerId: c.id, containerName: name),
+                  ),
+                ),
+              ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (_) => LogsScreen(containerId: c.id, containerName: name),
