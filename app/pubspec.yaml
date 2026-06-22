@@ -41,6 +41,7 @@ dependencies:
   flutter_riverpod: ^2.5.1
   share_plus: ^13.1.0
   web_socket_channel: ^3.0.3
+  xterm: ^4.0.0
 
 dev_dependencies:
   flutter_test:
