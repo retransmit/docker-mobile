@@ -29,6 +29,15 @@ class _FakeTransport implements Transport {
         [...frame(1, utf8.encode('hello-out\n')), ...frame(2, utf8.encode('oops-err\n'))];
     return Stream.value(bytes);
   }
+
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
 }
 
 Widget _wrap(Transport t) => ProviderScope(

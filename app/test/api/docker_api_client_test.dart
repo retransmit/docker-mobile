@@ -19,6 +19,15 @@ class _FakeTransport implements Transport {
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
       throw UnimplementedError();
+
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
 }
 
 void main() {

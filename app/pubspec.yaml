@@ -40,6 +40,7 @@ dependencies:
   # App state management.
   flutter_riverpod: ^2.5.1
   share_plus: ^13.1.0
+  web_socket_channel: ^3.0.3
 
 dev_dependencies:
   flutter_test:

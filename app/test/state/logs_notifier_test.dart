@@ -17,6 +17,13 @@ class _FakeTransport implements Transport {
   Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{}', 200);
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) => Stream.fromIterable(chunks);
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
 }
 
 /// Streams whatever is pushed into [controller], so tests can drive bytes,
@@ -28,6 +35,13 @@ class _ControllerTransport implements Transport {
   Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{}', 200);
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) => controller.stream;
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
 }
 
 List<int> frame(int type, List<int> payload) {
