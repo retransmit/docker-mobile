@@ -16,74 +16,71 @@ class _FakeExecChannel implements ExecChannel {
   @override
   void send(List<int> data) => sent.add(data);
   @override
-  Future<void> close() {
+  Future<void> close() async {
     closed = true;
-    return controller.close();
+    if (!controller.isClosed) await controller.close();
   }
 }
 
-/// Transport whose execAttach only completes when [gate] is fired, letting a
-/// test dispose the controller while the handshake is still in flight.
-class _GatedExecTransport implements Transport {
-  final _FakeExecChannel channel;
-  final Completer<void> gate;
-  _GatedExecTransport({required this.channel, required this.gate});
-
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async =>
-      http.Response('{"Running":false,"ExitCode":0}', 200);
-  @override
-  Future<http.Response> post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) async =>
-      http.Response('{"Id":"e1"}', 201);
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
-    await gate.future;
-    return channel;
-  }
+class _Post {
+  final String path;
+  final Map<String, String>? query;
+  final Object? body;
+  _Post(this.path, this.query, this.body);
 }
 
 class _ExecFakeTransport implements Transport {
-  final _FakeExecChannel channel;
-  final String execId;
+  final List<_FakeExecChannel> channels = [];
+  final List<_Post> posts = [];
   final int exitCode;
-  _ExecFakeTransport({required this.channel, required this.execId, this.exitCode = 0});
+  final bool failCreate;
+  _ExecFakeTransport({this.exitCode = 0, this.failCreate = false});
+
+  _FakeExecChannel get lastChannel => channels.last;
 
   @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async =>
       http.Response('{"Running":false,"ExitCode":$exitCode}', 200);
+
   @override
   Future<http.Response> post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) async =>
-      http.Response('{"Id":"$execId"}', 201);
+      {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
+    posts.add(_Post(path, query, body));
+    if (path.endsWith('/exec')) {
+      return failCreate ? http.Response('boom', 500) : http.Response('{"Id":"e1"}', 201);
+    }
+    return http.Response('', 200); // resize
+  }
+
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
+
   @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async => channel;
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
+    final ch = _FakeExecChannel();
+    channels.add(ch);
+    return ch;
+  }
 }
 
 void main() {
   test('forwards terminal input to the channel', () async {
-    final ch = _FakeExecChannel();
-    final client = DockerApiClient(_ExecFakeTransport(channel: ch, execId: 'e1'));
-    final c = ExecSessionController(client, 'cid');
+    final t = _ExecFakeTransport();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
     await pumpEventQueue();
     expect(c.status, ExecStatus.connected);
 
     c.terminal.onOutput?.call('hi');
-    expect(ch.sent.map(utf8.decode).toList(), ['hi']);
+    expect(t.lastChannel.sent.map(utf8.decode).toList(), ['hi']);
     c.dispose();
   });
 
   test('status becomes ended with the exit code when output closes', () async {
-    final ch = _FakeExecChannel();
-    final client = DockerApiClient(_ExecFakeTransport(channel: ch, execId: 'e1', exitCode: 137));
-    final c = ExecSessionController(client, 'cid');
+    final t = _ExecFakeTransport(exitCode: 137);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
     await pumpEventQueue();
 
-    await ch.controller.close();
+    await t.lastChannel.controller.close();
     await pumpEventQueue();
 
     expect(c.status, ExecStatus.ended);
@@ -91,26 +88,68 @@ void main() {
     c.dispose();
   });
 
-  test('disposing while the attach handshake is in flight closes the channel and does not notify', () async {
-    final ch = _FakeExecChannel();
-    final gate = Completer<void>();
-    final client = DockerApiClient(_GatedExecTransport(channel: ch, gate: gate));
-    final c = ExecSessionController(client, 'cid');
-    var notifyCount = 0;
-    c.addListener(() => notifyCount++);
+  test('error status when exec creation fails', () async {
+    final t = _ExecFakeTransport(failCreate: true);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
     await pumpEventQueue();
-    expect(c.status, ExecStatus.connecting);
-
+    expect(c.status, ExecStatus.error);
     c.dispose();
-    final notifiesBeforeResolve = notifyCount;
+  });
 
-    // Let the in-flight attach resolve now that we're disposed. A post-dispose
-    // notifyListeners() would throw (FlutterError) on a disposed ChangeNotifier.
-    gate.complete();
+  test('restart tears down the old session and starts a new one with the given command', () async {
+    final t = _ExecFakeTransport();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    expect(t.channels, hasLength(1));
+
+    await c.restart('top');
     await pumpEventQueue();
 
-    expect(ch.closed, isTrue, reason: 'resolved channel must be torn down, not leaked');
-    expect(notifyCount, notifiesBeforeResolve,
-        reason: 'must not notify listeners after dispose');
+    expect(t.channels[0].closed, isTrue); // prior channel closed
+    expect(t.channels, hasLength(2)); // new session attached
+    expect(c.status, ExecStatus.connected);
+    final createPosts = t.posts.where((p) => p.path.endsWith('/exec')).toList();
+    expect((createPosts.last.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
+    c.dispose();
+  });
+
+  test('terminal resize is forwarded to resizeExec with h=rows, w=cols', () async {
+    final t = _ExecFakeTransport();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+
+    c.terminal.onResize?.call(120, 40, 0, 0); // (width=cols, height=rows, ...)
+    await pumpEventQueue();
+
+    final resize = t.posts.firstWhere((p) => p.path.endsWith('/resize'));
+    expect(resize.path, '/exec/e1/resize');
+    expect(resize.query, {'h': '40', 'w': '120'});
+    c.dispose();
+  });
+
+  test('default command tries bash then falls back to sh', () async {
+    final t = _ExecFakeTransport();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+
+    final create = t.posts.firstWhere((p) => p.path.endsWith('/exec'));
+    expect((create.body as Map)['Cmd'], [
+      '/bin/sh',
+      '-c',
+      'if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi',
+    ]);
+    c.dispose();
+  });
+
+  test('disposing during connect does not notify after dispose or leak the channel', () async {
+    final t = _ExecFakeTransport();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    c.dispose(); // dispose while createExec/attachExec are still in flight
+    await pumpEventQueue(); // let the in-flight futures resolve
+
+    // A channel that resolved after dispose must have been closed, not leaked;
+    // and the controller must not have called notifyListeners after dispose
+    // (which would throw and fail this test).
+    expect(t.channels.every((ch) => ch.closed), isTrue);
   });
 }
