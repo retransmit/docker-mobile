@@ -83,7 +83,8 @@ class AgentTransport implements Transport {
   Future<http.Response> post(String path,
       {Map<String, String>? query, Object? body, Map<String, String>? headers}) {
     final uri = baseUri.replace(path: path, queryParameters: query);
-    final h = <String, String>{'Authorization': 'Bearer $token', ...?headers};
+    // Bearer last so a caller-supplied header can never override the token.
+    final h = <String, String>{...?headers, 'Authorization': 'Bearer $token'};
     String? encoded;
     if (body != null) {
       encoded = body is String ? body : jsonEncode(body);
@@ -108,15 +109,27 @@ class AgentTransport implements Transport {
 
 class _WebSocketExecChannel implements ExecChannel {
   final IOWebSocketChannel _channel;
+  // Cached once: the underlying WS stream is single-subscription, so re-wrapping
+  // per access would throw "already listened" on a second read.
+  late final Stream<List<int>> _output =
+      _channel.stream.map((e) => e is String ? utf8.encode(e) : e as List<int>);
+  bool _closed = false;
+
   _WebSocketExecChannel(this._channel);
 
   @override
-  Stream<List<int>> get output =>
-      _channel.stream.map((e) => e is String ? utf8.encode(e) : e as List<int>);
+  Stream<List<int>> get output => _output;
 
   @override
-  void send(List<int> data) => _channel.sink.add(data);
+  void send(List<int> data) {
+    if (_closed) return;
+    _channel.sink.add(data);
+  }
 
   @override
-  Future<void> close() => _channel.sink.close();
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    await _channel.sink.close();
+  }
 }
