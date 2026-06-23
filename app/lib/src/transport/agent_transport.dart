@@ -94,6 +94,12 @@ class AgentTransport implements Transport {
   }
 
   @override
+  Future<http.Response> delete(String path, {Map<String, String>? query}) {
+    final uri = baseUri.replace(path: path, queryParameters: query);
+    return _client.delete(uri, headers: {'Authorization': 'Bearer $token'});
+  }
+
+  @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
     final wsScheme = baseUri.scheme == 'https' ? 'wss' : 'ws';
     final uri = baseUri.replace(

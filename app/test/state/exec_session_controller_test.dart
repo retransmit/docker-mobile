@@ -61,6 +61,10 @@ class _ExecFakeTransport implements Transport {
     channels.add(ch);
     return ch;
   }
+
+  @override
+  Future<http.Response> delete(String path, {Map<String, String>? query}) =>
+      throw UnimplementedError();
 }
 
 void main() {

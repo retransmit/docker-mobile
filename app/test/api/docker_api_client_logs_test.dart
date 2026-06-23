@@ -31,6 +31,10 @@ class _FakeTransport implements Transport {
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
       throw UnimplementedError();
+
+  @override
+  Future<http.Response> delete(String path, {Map<String, String>? query}) =>
+      throw UnimplementedError();
 }
 
 List<int> frame(int type, List<int> payload) {

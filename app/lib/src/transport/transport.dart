@@ -31,4 +31,7 @@ abstract class Transport {
 
   /// Open an interactive exec session by WebSocket bridge.
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows});
+
+  /// DELETE with optional query params (e.g. container remove).
+  Future<http.Response> delete(String path, {Map<String, String>? query});
 }
