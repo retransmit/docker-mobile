@@ -1,7 +1,10 @@
 import 'dart:convert';
 
+import 'package:http/http.dart' as http;
+
 import '../transport/transport.dart';
 import 'models/docker_container.dart';
+import 'models/container_detail.dart';
 import 'models/container_inspect.dart';
 import 'models/exec_inspect.dart';
 import 'stdcopy.dart';
@@ -92,4 +95,42 @@ class DockerApiClient {
     }
     return ExecInspect.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
+
+  void _ensure(http.Response resp, {Set<int> ok = const {204}}) {
+    if (!ok.contains(resp.statusCode)) {
+      throw DockerApiException(resp.statusCode, resp.body);
+    }
+  }
+
+  Future<ContainerDetail> inspectContainerDetail(String id) async {
+    final resp = await transport.get('/containers/$id/json');
+    if (resp.statusCode != 200) {
+      throw DockerApiException(resp.statusCode, resp.body);
+    }
+    return ContainerDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<void> startContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/start'), ok: const {204, 304});
+
+  Future<void> stopContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/stop'), ok: const {204, 304});
+
+  Future<void> restartContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/restart'));
+
+  Future<void> pauseContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/pause'));
+
+  Future<void> unpauseContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/unpause'));
+
+  Future<void> killContainer(String id) async =>
+      _ensure(await transport.post('/containers/$id/kill'));
+
+  Future<void> renameContainer(String id, String newName) async =>
+      _ensure(await transport.post('/containers/$id/rename', query: {'name': newName}));
+
+  Future<void> removeContainer(String id, {bool force = false, bool removeVolumes = false}) async =>
+      _ensure(await transport.delete('/containers/$id', query: {'force': '$force', 'v': '$removeVolumes'}));
 }
