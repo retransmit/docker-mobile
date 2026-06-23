@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/docker_api_client.dart';
+import '../api/models/container_detail.dart';
 import '../api/models/docker_container.dart';
 import '../transport/transport.dart';
 
@@ -20,4 +21,11 @@ final containersProvider = FutureProvider<List<DockerContainer>>((ref) async {
     throw StateError('Not connected');
   }
   return client.listContainers();
+});
+
+/// Rich inspect for the container detail screen.
+final containerDetailProvider = FutureProvider.family<ContainerDetail, String>((ref, id) {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  return client.inspectContainerDetail(id);
 });
