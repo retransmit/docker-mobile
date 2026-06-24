@@ -5,6 +5,7 @@ import '../api/models/container_detail.dart';
 import '../api/models/docker_container.dart';
 import '../api/models/docker_image.dart';
 import '../api/models/docker_network.dart';
+import '../api/models/docker_volume.dart';
 import '../api/models/image_detail.dart';
 import '../transport/transport.dart';
 
@@ -62,4 +63,10 @@ final networkDetailProvider = FutureProvider.family<NetworkDetail, String>((ref,
   final client = ref.watch(dockerClientProvider);
   if (client == null) throw StateError('Not connected');
   return client.inspectNetwork(id);
+});
+
+final volumesProvider = FutureProvider<List<DockerVolume>>((ref) {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  return client.listVolumes();
 });
