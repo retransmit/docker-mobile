@@ -43,4 +43,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
   });
+
+  testWidgets('confirming Prune calls pruneImages', (tester) async {
+    final t = _FakeTransport();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [transportProvider.overrideWith((ref) => t)],
+      child: const MaterialApp(home: ImagesScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.cleaning_services));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Dangling'));
+    await tester.pumpAndSettle();
+
+    expect(t.posts, contains('/images/prune'));
+    expect(find.textContaining('Pruned'), findsOneWidget); // success snackbar
+  });
 }

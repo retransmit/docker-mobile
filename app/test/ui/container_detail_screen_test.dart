@@ -115,4 +115,18 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Failed'), findsOneWidget);
   });
+
+  testWidgets('Rename dialog renames the container without a controller crash', (tester) async {
+    final t = _FakeTransport(status: 'running', running: true);
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(OutlinedButton, 'Rename'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'newname');
+    await tester.tap(find.widgetWithText(TextButton, 'Rename')); // dialog confirm
+    await tester.pumpAndSettle();
+
+    expect(t.posts, contains('/containers/a/rename'));
+  });
 }

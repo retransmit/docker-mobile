@@ -25,16 +25,22 @@ class _FakeTransport implements Transport {
 }
 
 void main() {
-  testWidgets('switches between Containers and Images tabs', (tester) async {
+  testWidgets('the bottom nav switches the selected tab index', (tester) async {
     await tester.pumpWidget(ProviderScope(
       overrides: [transportProvider.overrideWith((ref) => _FakeTransport())],
       child: const MaterialApp(home: HomeScreen()),
     ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Containers'), findsWidgets); // containers tab app bar/label
-    await tester.tap(find.byIcon(Icons.layers)); // Images nav item
+    NavigationBar bar() => tester.widget<NavigationBar>(find.byType(NavigationBar));
+    expect(bar().selectedIndex, 0); // Containers
+
+    await tester.tap(find.byIcon(Icons.layers)); // Images destination
     await tester.pumpAndSettle();
-    expect(find.text('Images'), findsWidgets);
+    expect(bar().selectedIndex, 1);
+
+    await tester.tap(find.byIcon(Icons.inventory)); // Containers destination
+    await tester.pumpAndSettle();
+    expect(bar().selectedIndex, 0);
   });
 }
