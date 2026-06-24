@@ -65,6 +65,10 @@ class _ExecFakeTransport implements Transport {
   @override
   Future<http.Response> delete(String path, {Map<String, String>? query}) =>
       throw UnimplementedError();
+
+  @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
+      const Stream.empty();
 }
 
 void main() {

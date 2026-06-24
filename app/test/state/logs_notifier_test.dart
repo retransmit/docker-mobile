@@ -27,6 +27,9 @@ class _FakeTransport implements Transport {
   @override
   Future<http.Response> delete(String path, {Map<String, String>? query}) =>
       throw UnimplementedError();
+  @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
+      const Stream.empty();
 }
 
 /// Streams whatever is pushed into [controller], so tests can drive bytes,
@@ -48,6 +51,9 @@ class _ControllerTransport implements Transport {
   @override
   Future<http.Response> delete(String path, {Map<String, String>? query}) =>
       throw UnimplementedError();
+  @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
+      const Stream.empty();
 }
 
 List<int> frame(int type, List<int> payload) {

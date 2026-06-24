@@ -38,6 +38,9 @@ class _FakeTransport implements Transport {
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
   @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
+      const Stream.empty();
+  @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
       throw UnimplementedError();
 }

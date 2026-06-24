@@ -34,4 +34,7 @@ abstract class Transport {
 
   /// DELETE with optional query params (e.g. container remove).
   Future<http.Response> delete(String path, {Map<String, String>? query});
+
+  /// Streamed POST (e.g. image pull/build/load progress). Cancel closes it.
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body});
 }
