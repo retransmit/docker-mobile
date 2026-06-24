@@ -94,4 +94,9 @@ void main() {
     final t = _FakeTransport()..postStatus = 500;
     expect(() => DockerApiClient(t).startContainer('a'), throwsA(isA<DockerApiException>()));
   });
+
+  test('304 is rejected for non-start/stop actions (start/stop-only no-op)', () async {
+    final t = _FakeTransport()..postStatus = 304;
+    expect(() => DockerApiClient(t).restartContainer('a'), throwsA(isA<DockerApiException>()));
+  });
 }
