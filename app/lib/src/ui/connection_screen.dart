@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 import '../transport/agent_transport.dart';
-import 'containers_screen.dart';
+import 'home_screen.dart';
 
 class ConnectionScreen extends ConsumerStatefulWidget {
   const ConnectionScreen({super.key});
@@ -40,7 +40,7 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
     ref.read(transportProvider.notifier).state =
         AgentTransport(baseUri: baseUri, token: _token.text);
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ContainersScreen()),
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
     );
   }
 
