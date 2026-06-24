@@ -9,25 +9,32 @@ import 'package:docker_mobile/src/ui/container_detail_screen.dart';
 class _FakeTransport implements Transport {
   final String status; // container State.Status
   final bool running;
+  final bool paused;
+  final int actionStatus; // status returned by post/delete
   final List<String> posts = [];
   final List<String> deletes = [];
-  _FakeTransport({this.status = 'running', this.running = true});
+  _FakeTransport({
+    this.status = 'running',
+    this.running = true,
+    this.paused = false,
+    this.actionStatus = 204,
+  });
 
   @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response(
-        '{"Id":"a","Name":"/web","Config":{"Image":"nginx"},"State":{"Status":"$status","Running":$running,"Paused":false}}',
+        '{"Id":"a","Name":"/web","Config":{"Image":"nginx"},"State":{"Status":"$status","Running":$running,"Paused":$paused}}',
         200,
       );
   @override
   Future<http.Response> post(String path,
       {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
     posts.add(path);
-    return http.Response('', 204);
+    return http.Response('', actionStatus);
   }
   @override
   Future<http.Response> delete(String path, {Map<String, String>? query}) async {
     deletes.add(path);
-    return http.Response('', 204);
+    return http.Response('', actionStatus);
   }
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
@@ -57,8 +64,30 @@ void main() {
     expect(find.byType(SnackBar), findsOneWidget);
   });
 
-  testWidgets('Remove opens a confirmation dialog', (tester) async {
+  testWidgets('a running container shows Stop/Restart/Pause and hides Start', (tester) async {
     final t = _FakeTransport(status: 'running', running: true);
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ElevatedButton, 'Start'), findsNothing);
+    expect(find.widgetWithText(ElevatedButton, 'Stop'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Restart'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Pause'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Unpause'), findsNothing);
+  });
+
+  testWidgets('a paused container offers Unpause and hides Stop/Pause', (tester) async {
+    final t = _FakeTransport(status: 'paused', running: true, paused: true);
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+
+    expect(find.widgetWithText(ElevatedButton, 'Unpause'), findsOneWidget);
+    expect(find.widgetWithText(ElevatedButton, 'Pause'), findsNothing);
+    expect(find.widgetWithText(ElevatedButton, 'Stop'), findsNothing);
+  });
+
+  testWidgets('Remove opens a confirmation dialog and confirming calls delete', (tester) async {
+    final t = _FakeTransport(status: 'exited', running: false);
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
@@ -66,5 +95,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.text('Force'), findsOneWidget);
+
+    // Confirm (the dialog's TextButton labelled 'Remove').
+    await tester.tap(find.widgetWithText(TextButton, 'Remove'));
+    await tester.pumpAndSettle();
+    expect(t.deletes, contains('/containers/a'));
+    expect(find.byType(SnackBar), findsOneWidget);
+  });
+
+  testWidgets('a failing action shows an error snackbar', (tester) async {
+    final t = _FakeTransport(status: 'exited', running: false, actionStatus: 500);
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Start'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Failed'), findsOneWidget);
   });
 }

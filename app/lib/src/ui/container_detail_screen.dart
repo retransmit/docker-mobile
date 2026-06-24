@@ -179,19 +179,23 @@ Future<bool> _confirm(BuildContext context, String title, String message) async 
   return ok ?? false;
 }
 
-Future<String?> _renameDialog(BuildContext context, String current) {
+Future<String?> _renameDialog(BuildContext context, String current) async {
   final ctl = TextEditingController(text: current);
-  return showDialog<String>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Rename container'),
-      content: TextField(controller: ctl, autofocus: true, decoration: const InputDecoration(labelText: 'New name')),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-        TextButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Rename')),
-      ],
-    ),
-  );
+  try {
+    return await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename container'),
+        content: TextField(controller: ctl, autofocus: true, decoration: const InputDecoration(labelText: 'New name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Rename')),
+        ],
+      ),
+    );
+  } finally {
+    ctl.dispose();
+  }
 }
 
 /// Returns (force, removeVolumes) or null if cancelled.
