@@ -75,12 +75,13 @@ class NetworkDetail {
       enableIPv6: json['EnableIPv6'] as bool? ?? false,
       ipamDriver: ipamObj['Driver'] as String? ?? '',
       ipam: config.map((c) => IpamConfig.fromJson(c as Map<String, dynamic>)).toList(),
-      containers: containersObj.entries
-          .map((e) => NetworkContainer(
-                name: (e.value as Map<String, dynamic>)['Name'] as String? ?? '',
-                ipv4: (e.value as Map<String, dynamic>)['IPv4Address'] as String? ?? '',
-              ))
-          .toList(),
+      containers: containersObj.entries.map((e) {
+        final v = (e.value as Map<String, dynamic>?) ?? const {};
+        return NetworkContainer(
+          name: v['Name'] as String? ?? '',
+          ipv4: v['IPv4Address'] as String? ?? '',
+        );
+      }).toList(),
       labels: ((json['Labels'] as Map<String, dynamic>?) ?? const {}).map((k, v) => MapEntry(k, '$v')),
       options: ((json['Options'] as Map<String, dynamic>?) ?? const {}).map((k, v) => MapEntry(k, '$v')),
     );

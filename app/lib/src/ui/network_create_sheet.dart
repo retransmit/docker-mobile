@@ -73,7 +73,7 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
       navigator.pop();
       messenger.showSnackBar(const SnackBar(content: Text('Network created')));
     } catch (e) {
-      setState(() => _busy = false);
+      if (mounted) setState(() => _busy = false); // sheet may be popped mid-flight
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
     }
   }
