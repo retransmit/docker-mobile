@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'containers_screen.dart';
 import 'images_screen.dart';
 import 'networks_screen.dart';
+import 'volumes_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -20,7 +21,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [ContainersScreen(), ImagesScreen(), NetworksScreen()],
+        children: const [ContainersScreen(), ImagesScreen(), NetworksScreen(), VolumesScreen()],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
@@ -29,6 +30,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           NavigationDestination(icon: Icon(Icons.inventory), label: 'Containers'),
           NavigationDestination(icon: Icon(Icons.layers), label: 'Images'),
           NavigationDestination(icon: Icon(Icons.hub), label: 'Networks'),
+          NavigationDestination(icon: Icon(Icons.storage), label: 'Volumes'),
         ],
       ),
     );

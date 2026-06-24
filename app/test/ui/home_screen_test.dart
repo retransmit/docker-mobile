@@ -43,6 +43,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(bar().selectedIndex, 2);
 
+    await tester.tap(find.byIcon(Icons.storage)); // Volumes destination
+    await tester.pumpAndSettle();
+    expect(bar().selectedIndex, 3);
+
     await tester.tap(find.byIcon(Icons.inventory)); // Containers destination
     await tester.pumpAndSettle();
     expect(bar().selectedIndex, 0);
