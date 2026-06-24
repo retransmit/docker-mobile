@@ -8,6 +8,7 @@ import 'models/container_detail.dart';
 import 'models/container_inspect.dart';
 import 'models/exec_inspect.dart';
 import 'models/docker_image.dart';
+import 'models/docker_network.dart';
 import 'models/image_detail.dart';
 import 'models/pull_event.dart';
 import 'stdcopy.dart';
@@ -195,4 +196,59 @@ class DockerApiClient {
             query: {'filters': jsonEncode({'dangling': [danglingOnly ? 'true' : 'false']})}),
         ok: const {200},
       );
+
+  Future<List<DockerNetwork>> listNetworks() async {
+    final resp = await transport.get('/networks');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return (jsonDecode(resp.body) as List).map((e) => DockerNetwork.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<NetworkDetail> inspectNetwork(String id) async {
+    final resp = await transport.get('/networks/$id');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return NetworkDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<String> createNetwork({
+    required String name,
+    String driver = 'bridge',
+    bool internal = false,
+    bool attachable = false,
+    bool enableIPv6 = false,
+    List<IpamConfig> ipam = const [],
+    Map<String, String> labels = const {},
+    Map<String, String> options = const {},
+  }) async {
+    final body = <String, dynamic>{
+      'Name': name,
+      'Driver': driver,
+      'Internal': internal,
+      'Attachable': attachable,
+      'EnableIPv6': enableIPv6,
+    };
+    if (ipam.isNotEmpty) {
+      body['IPAM'] = {
+        'Driver': 'default',
+        'Config': ipam.map((c) {
+          final m = <String, dynamic>{};
+          if (c.subnet != null && c.subnet!.isNotEmpty) m['Subnet'] = c.subnet;
+          if (c.gateway != null && c.gateway!.isNotEmpty) m['Gateway'] = c.gateway;
+          if (c.ipRange != null && c.ipRange!.isNotEmpty) m['IPRange'] = c.ipRange;
+          return m;
+        }).toList(),
+      };
+    }
+    if (labels.isNotEmpty) body['Labels'] = labels;
+    if (options.isNotEmpty) body['Options'] = options;
+
+    final resp = await transport.post('/networks/create', body: body);
+    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    return (jsonDecode(resp.body) as Map<String, dynamic>)['Id'] as String;
+  }
+
+  Future<void> removeNetwork(String id) async =>
+      _ensure(await transport.delete('/networks/$id'), ok: const {204});
+
+  Future<void> pruneNetworks() async =>
+      _ensure(await transport.post('/networks/prune'), ok: const {200});
 }
