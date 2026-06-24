@@ -70,3 +70,9 @@ final volumesProvider = FutureProvider<List<DockerVolume>>((ref) {
   if (client == null) throw StateError('Not connected');
   return client.listVolumes();
 });
+
+final volumeDetailProvider = FutureProvider.family<DockerVolume, String>((ref, name) {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  return client.inspectVolume(name);
+});
