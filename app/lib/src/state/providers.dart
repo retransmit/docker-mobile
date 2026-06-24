@@ -4,6 +4,7 @@ import '../api/docker_api_client.dart';
 import '../api/models/container_detail.dart';
 import '../api/models/docker_container.dart';
 import '../api/models/docker_image.dart';
+import '../api/models/docker_network.dart';
 import '../api/models/image_detail.dart';
 import '../transport/transport.dart';
 
@@ -49,4 +50,10 @@ final imageHistoryProvider = FutureProvider.family<List<ImageHistoryLayer>, Stri
   final client = ref.watch(dockerClientProvider);
   if (client == null) throw StateError('Not connected');
   return client.imageHistory(id);
+});
+
+final networksProvider = FutureProvider<List<DockerNetwork>>((ref) {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  return client.listNetworks();
 });
