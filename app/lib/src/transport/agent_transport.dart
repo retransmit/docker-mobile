@@ -27,16 +27,10 @@ class AgentTransport implements Transport {
     return _client.get(uri, headers: {'Authorization': 'Bearer $token'});
   }
 
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) {
-    final uri = baseUri.replace(path: path, queryParameters: query);
+  Stream<List<int>> _openStream(http.Request request) {
     final client = _streamClientFactory();
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
-
-    // close() is invoked both by the body's onDone and by onCancel (which the
-    // SDK fires when the done event is delivered downstream); guard so an
-    // arbitrary http.Client is never closed twice.
     var clientClosed = false;
     void closeClient() {
       if (!clientClosed) {
@@ -47,8 +41,7 @@ class AgentTransport implements Transport {
 
     controller.onListen = () async {
       try {
-        final request = http.Request('GET', uri)
-          ..headers['Authorization'] = 'Bearer $token';
+        request.headers['Authorization'] = 'Bearer $token';
         final response = await client.send(request);
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
@@ -74,9 +67,26 @@ class AgentTransport implements Transport {
     };
     controller.onCancel = () async {
       await sub?.cancel();
-      closeClient(); // aborts the in-flight request
+      closeClient();
     };
     return controller.stream;
+  }
+
+  @override
+  Stream<List<int>> stream(String path, {Map<String, String>? query}) {
+    final uri = baseUri.replace(path: path, queryParameters: query);
+    return _openStream(http.Request('GET', uri));
+  }
+
+  @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) {
+    final uri = baseUri.replace(path: path, queryParameters: query);
+    final request = http.Request('POST', uri);
+    if (body != null) {
+      request.headers['Content-Type'] = 'application/json';
+      request.body = body is String ? body : jsonEncode(body);
+    }
+    return _openStream(request);
   }
 
   @override
