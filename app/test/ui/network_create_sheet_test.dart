@@ -8,13 +8,14 @@ import 'package:docker_mobile/src/ui/network_create_sheet.dart';
 
 class _FakeTransport implements Transport {
   Map<String, dynamic>? createBody;
+  int createStatus = 201;
   @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('[]', 200);
   @override
   Future<http.Response> post(String path,
       {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
     if (path == '/networks/create') createBody = body as Map<String, dynamic>;
-    return http.Response('{"Id":"n9"}', 201);
+    return http.Response('{"Id":"n9"}', createStatus);
   }
   @override
   Future<http.Response> delete(String path, {Map<String, String>? query}) async => http.Response('', 204);
@@ -71,5 +72,21 @@ void main() {
 
     final btn = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Create'));
     expect(btn.onPressed, isNull); // disabled
+  });
+
+  testWidgets('a failing create shows an error snackbar without crashing', (tester) async {
+    final t = _FakeTransport()..createStatus = 500;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [transportProvider.overrideWith((ref) => t)],
+      child: const MaterialApp(home: NetworkCreateSheet()),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.widgetWithText(TextField, 'Name'), 'mynet');
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Failed'), findsOneWidget);
   });
 }
