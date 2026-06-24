@@ -9,6 +9,7 @@ import 'models/container_inspect.dart';
 import 'models/exec_inspect.dart';
 import 'models/docker_image.dart';
 import 'models/docker_network.dart';
+import 'models/docker_volume.dart';
 import 'models/image_detail.dart';
 import 'models/pull_event.dart';
 import 'stdcopy.dart';
@@ -251,4 +252,37 @@ class DockerApiClient {
 
   Future<void> pruneNetworks() async =>
       _ensure(await transport.post('/networks/prune'), ok: const {200});
+
+  Future<List<DockerVolume>> listVolumes() async {
+    final resp = await transport.get('/volumes');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    final list = (jsonDecode(resp.body) as Map<String, dynamic>)['Volumes'] as List? ?? const [];
+    return list.map((e) => DockerVolume.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<DockerVolume> inspectVolume(String name) async {
+    final resp = await transport.get('/volumes/$name');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return DockerVolume.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<DockerVolume> createVolume({
+    required String name,
+    String driver = 'local',
+    Map<String, String> labels = const {},
+    Map<String, String> driverOpts = const {},
+  }) async {
+    final body = <String, dynamic>{'Name': name, 'Driver': driver};
+    if (labels.isNotEmpty) body['Labels'] = labels;
+    if (driverOpts.isNotEmpty) body['DriverOpts'] = driverOpts;
+    final resp = await transport.post('/volumes/create', body: body);
+    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    return DockerVolume.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<void> removeVolume(String name, {bool force = false}) async =>
+      _ensure(await transport.delete('/volumes/$name', query: {'force': '$force'}), ok: const {204});
+
+  Future<void> pruneVolumes() async =>
+      _ensure(await transport.post('/volumes/prune'), ok: const {200});
 }
