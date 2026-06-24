@@ -68,4 +68,18 @@ void main() {
     expect(t.deletes, contains('/volumes/data'));
     expect(find.text('open'), findsOneWidget); // popped back
   });
+
+  testWidgets('the Force switch sends force=true', (tester) async {
+    final t = _FakeTransport();
+    await _open(tester, t);
+
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Remove'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(SwitchListTile)); // toggle Force on
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove')); // confirm
+    await tester.pumpAndSettle();
+
+    expect(t.deleteQueries.last, {'force': 'true'});
+  });
 }
