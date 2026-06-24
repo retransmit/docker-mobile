@@ -57,3 +57,9 @@ final networksProvider = FutureProvider<List<DockerNetwork>>((ref) {
   if (client == null) throw StateError('Not connected');
   return client.listNetworks();
 });
+
+final networkDetailProvider = FutureProvider.family<NetworkDetail, String>((ref, id) {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  return client.inspectNetwork(id);
+});
