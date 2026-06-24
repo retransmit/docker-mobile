@@ -179,23 +179,34 @@ Future<bool> _confirm(BuildContext context, String title, String message) async 
   return ok ?? false;
 }
 
-Future<String?> _renameDialog(BuildContext context, String current) async {
-  final ctl = TextEditingController(text: current);
-  try {
-    return await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename container'),
-        content: TextField(controller: ctl, autofocus: true, decoration: const InputDecoration(labelText: 'New name')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('Rename')),
-        ],
-      ),
-    );
-  } finally {
-    ctl.dispose();
+Future<String?> _renameDialog(BuildContext context, String current) =>
+    showDialog<String>(context: context, builder: (_) => _RenameDialog(current: current));
+
+class _RenameDialog extends StatefulWidget {
+  final String current;
+  const _RenameDialog({required this.current});
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final _ctl = TextEditingController(text: widget.current);
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
   }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Rename container'),
+        content: TextField(controller: _ctl, autofocus: true, decoration: const InputDecoration(labelText: 'New name')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, _ctl.text), child: const Text('Rename')),
+        ],
+      );
 }
 
 /// Returns (force, removeVolumes) or null if cancelled.

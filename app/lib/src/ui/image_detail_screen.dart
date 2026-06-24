@@ -78,27 +78,38 @@ class ImageDetailScreen extends ConsumerWidget {
 }
 
 Future<(String, String)?> _tagDialog(BuildContext context) async {
-  final repo = TextEditingController();
-  final tag = TextEditingController(text: 'latest');
-  try {
-    return await showDialog<(String, String)>(
-      context: context,
-      builder: (ctx) => AlertDialog(
+  return showDialog<(String, String)>(context: context, builder: (_) => const _TagDialog());
+}
+
+class _TagDialog extends StatefulWidget {
+  const _TagDialog();
+  @override
+  State<_TagDialog> createState() => _TagDialogState();
+}
+
+class _TagDialogState extends State<_TagDialog> {
+  final _repo = TextEditingController();
+  final _tag = TextEditingController(text: 'latest');
+
+  @override
+  void dispose() {
+    _repo.dispose();
+    _tag.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
         title: const Text('Tag image'),
         content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: repo, decoration: const InputDecoration(labelText: 'Repository')),
-          TextField(controller: tag, decoration: const InputDecoration(labelText: 'Tag')),
+          TextField(controller: _repo, decoration: const InputDecoration(labelText: 'Repository')),
+          TextField(controller: _tag, decoration: const InputDecoration(labelText: 'Tag')),
         ]),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          TextButton(onPressed: () => Navigator.pop(ctx, (repo.text, tag.text)), child: const Text('Tag')),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: () => Navigator.pop(context, (_repo.text, _tag.text)), child: const Text('Tag')),
         ],
-      ),
-    );
-  } finally {
-    repo.dispose();
-    tag.dispose();
-  }
+      );
 }
 
 Future<(bool, bool)?> _removeImageDialog(BuildContext context) {

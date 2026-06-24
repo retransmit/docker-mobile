@@ -157,18 +157,21 @@ class DockerApiClient {
 
   Stream<PullEvent> pullImage(String image, {String tag = 'latest'}) async* {
     final raw = transport.postStream('/images/create', query: {'fromImage': image, 'tag': tag});
-    var buffer = '';
+    final buffer = <int>[]; // buffer BYTES so a multi-byte UTF-8 char split across chunks survives
     await for (final chunk in raw) {
-      buffer += utf8.decode(chunk, allowMalformed: true);
-      final lines = buffer.split('\n');
-      buffer = lines.removeLast();
-      for (final line in lines) {
-        final ev = _parsePullLine(line);
+      buffer.addAll(chunk);
+      var nl = buffer.indexOf(0x0A);
+      while (nl != -1) {
+        final ev = _parsePullLine(utf8.decode(buffer.sublist(0, nl), allowMalformed: true));
+        buffer.removeRange(0, nl + 1);
         if (ev != null) yield ev;
+        nl = buffer.indexOf(0x0A);
       }
     }
-    final ev = _parsePullLine(buffer);
-    if (ev != null) yield ev;
+    if (buffer.isNotEmpty) {
+      final ev = _parsePullLine(utf8.decode(buffer, allowMalformed: true));
+      if (ev != null) yield ev;
+    }
   }
 
   PullEvent? _parsePullLine(String line) {
@@ -188,7 +191,8 @@ class DockerApiClient {
       _ensure(await transport.delete('/images/$id', query: {'force': '$force', 'noprune': '$noprune'}), ok: const {200});
 
   Future<void> pruneImages({bool danglingOnly = true}) async => _ensure(
-        await transport.post('/images/prune', query: {'filters': '{"dangling":["${danglingOnly ? 'true' : 'false'}"]}'}),
+        await transport.post('/images/prune',
+            query: {'filters': jsonEncode({'dangling': [danglingOnly ? 'true' : 'false']})}),
         ok: const {200},
       );
 }

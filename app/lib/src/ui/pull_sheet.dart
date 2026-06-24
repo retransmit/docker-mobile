@@ -71,6 +71,7 @@ class _PullSheetState extends ConsumerState<PullSheet> {
         _running = false;
         _done = true;
       });
+      if (_error == null) ref.invalidate(imagesProvider); // surface the new image on return
     });
   }
 
