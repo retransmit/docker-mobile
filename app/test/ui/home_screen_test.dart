@@ -39,6 +39,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(bar().selectedIndex, 1);
 
+    await tester.tap(find.byIcon(Icons.hub)); // Networks destination
+    await tester.pumpAndSettle();
+    expect(bar().selectedIndex, 2);
+
     await tester.tap(find.byIcon(Icons.inventory)); // Containers destination
     await tester.pumpAndSettle();
     expect(bar().selectedIndex, 0);
