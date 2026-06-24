@@ -7,6 +7,9 @@ import 'models/docker_container.dart';
 import 'models/container_detail.dart';
 import 'models/container_inspect.dart';
 import 'models/exec_inspect.dart';
+import 'models/docker_image.dart';
+import 'models/image_detail.dart';
+import 'models/pull_event.dart';
 import 'stdcopy.dart';
 
 class DockerApiException implements Exception {
@@ -133,4 +136,59 @@ class DockerApiClient {
 
   Future<void> removeContainer(String id, {bool force = false, bool removeVolumes = false}) async =>
       _ensure(await transport.delete('/containers/$id', query: {'force': '$force', 'v': '$removeVolumes'}));
+
+  Future<List<DockerImage>> listImages() async {
+    final resp = await transport.get('/images/json');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return (jsonDecode(resp.body) as List).map((e) => DockerImage.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<ImageDetail> inspectImage(String id) async {
+    final resp = await transport.get('/images/$id/json');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return ImageDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<List<ImageHistoryLayer>> imageHistory(String id) async {
+    final resp = await transport.get('/images/$id/history');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return (jsonDecode(resp.body) as List).map((e) => ImageHistoryLayer.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Stream<PullEvent> pullImage(String image, {String tag = 'latest'}) async* {
+    final raw = transport.postStream('/images/create', query: {'fromImage': image, 'tag': tag});
+    var buffer = '';
+    await for (final chunk in raw) {
+      buffer += utf8.decode(chunk, allowMalformed: true);
+      final lines = buffer.split('\n');
+      buffer = lines.removeLast();
+      for (final line in lines) {
+        final ev = _parsePullLine(line);
+        if (ev != null) yield ev;
+      }
+    }
+    final ev = _parsePullLine(buffer);
+    if (ev != null) yield ev;
+  }
+
+  PullEvent? _parsePullLine(String line) {
+    final t = line.trim();
+    if (t.isEmpty) return null;
+    try {
+      return PullEvent.fromJson(jsonDecode(t) as Map<String, dynamic>);
+    } catch (_) {
+      return null; // skip a fragment that isn't a complete JSON object
+    }
+  }
+
+  Future<void> tagImage(String id, {required String repo, String tag = 'latest'}) async =>
+      _ensure(await transport.post('/images/$id/tag', query: {'repo': repo, 'tag': tag}), ok: const {201});
+
+  Future<void> removeImage(String id, {bool force = false, bool noprune = false}) async =>
+      _ensure(await transport.delete('/images/$id', query: {'force': '$force', 'noprune': '$noprune'}), ok: const {200});
+
+  Future<void> pruneImages({bool danglingOnly = true}) async => _ensure(
+        await transport.post('/images/prune', query: {'filters': '{"dangling":["${danglingOnly ? 'true' : 'false'}"]}'}),
+        ok: const {200},
+      );
 }
