@@ -12,6 +12,10 @@ secrets/
 .env.*
 *credentials*
 *.token
+# Exception: committed TLS test fixtures (self-signed, non-secret) so CI without
+# openssl can run the transport tests.
+!app/test/fixtures/client-cert.pem
+!app/test/fixtures/client-key.pem
 
 # === Flutter / Dart (app/) ===
 .dart_tool/
