@@ -1,48 +1,18 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../state/providers.dart';
-import '../transport/agent_transport.dart';
-import 'home_screen.dart';
+import 'connect/agent_form.dart';
+import 'connect/tls_form.dart';
 
-class ConnectionScreen extends ConsumerStatefulWidget {
+enum _TransportType { agent, tls }
+
+class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key});
-
   @override
-  ConsumerState<ConnectionScreen> createState() => _ConnectionScreenState();
+  State<ConnectionScreen> createState() => _ConnectionScreenState();
 }
 
-class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
-  final _host = TextEditingController();
-  final _port = TextEditingController(text: '8080');
-  final _token = TextEditingController();
-  bool _useTls = false;
-
-  @override
-  void dispose() {
-    _host.dispose();
-    _port.dispose();
-    _token.dispose();
-    super.dispose();
-  }
-
-  void _connect() {
-    final host = _host.text.trim();
-    final port = int.tryParse(_port.text.trim());
-    if (host.isEmpty || port == null || port < 1 || port > 65535) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid host and port (1-65535).')),
-      );
-      return;
-    }
-    // Build the URI from validated parts (no Uri.parse on raw input).
-    final baseUri = Uri(scheme: _useTls ? 'https' : 'http', host: host, port: port);
-    ref.read(transportProvider.notifier).state =
-        AgentTransport(baseUri: baseUri, token: _token.text);
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const HomeScreen()),
-    );
-  }
+class _ConnectionScreenState extends State<ConnectionScreen> {
+  _TransportType _type = _TransportType.agent;
 
   @override
   Widget build(BuildContext context) {
@@ -52,24 +22,20 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
-            TextField(
-              controller: _port,
-              decoration: const InputDecoration(labelText: 'Port'),
-              keyboardType: TextInputType.number,
-            ),
-            TextField(
-              controller: _token,
-              decoration: const InputDecoration(labelText: 'Token'),
-              obscureText: true,
-            ),
-            SwitchListTile(
-              title: const Text('Use TLS (https)'),
-              value: _useTls,
-              onChanged: (v) => setState(() => _useTls = v),
+            SegmentedButton<_TransportType>(
+              segments: const [
+                ButtonSegment(value: _TransportType.agent, label: Text('Agent'), icon: Icon(Icons.dns)),
+                ButtonSegment(value: _TransportType.tls, label: Text('TCP+TLS'), icon: Icon(Icons.lock)),
+              ],
+              selected: {_type},
+              onSelectionChanged: (s) => setState(() => _type = s.first),
             ),
             const SizedBox(height: 16),
-            FilledButton(onPressed: _connect, child: const Text('Connect')),
+            Expanded(
+              child: SingleChildScrollView(
+                child: _type == _TransportType.agent ? const AgentForm() : const TlsForm(),
+              ),
+            ),
           ],
         ),
       ),
