@@ -12,6 +12,7 @@ import 'models/docker_network.dart';
 import 'models/docker_volume.dart';
 import 'models/image_detail.dart';
 import 'models/pull_event.dart';
+import 'models/system_info.dart';
 import 'stdcopy.dart';
 
 class DockerApiException implements Exception {
@@ -285,4 +286,36 @@ class DockerApiClient {
 
   Future<void> pruneVolumes() async =>
       _ensure(await transport.post('/volumes/prune'), ok: const {200});
+
+  Future<SystemInfo> getInfo() async {
+    final resp = await transport.get('/info');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return SystemInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<VersionInfo> getVersion() async {
+    final resp = await transport.get('/version');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return VersionInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<DiskUsage> getDiskUsage() async {
+    final resp = await transport.get('/system/df');
+    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    return DiskUsage.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<void> pruneContainers() async =>
+      _ensure(await transport.post('/containers/prune'), ok: const {200});
+
+  Future<void> pruneBuildCache() async =>
+      _ensure(await transport.post('/build/prune'), ok: const {200});
+
+  Future<void> systemPrune({bool allImages = false, bool includeVolumes = false}) async {
+    await pruneContainers();
+    await pruneNetworks();
+    await pruneImages(danglingOnly: !allImages);
+    await pruneBuildCache();
+    if (includeVolumes) await pruneVolumes();
+  }
 }
