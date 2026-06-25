@@ -8,7 +8,12 @@ import 'package:docker_mobile/src/ui/home_screen.dart';
 
 class _FakeTransport implements Transport {
   @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('[]', 200);
+  Future<http.Response> get(String path, {Map<String, String>? query}) async {
+    if (path == '/info') return http.Response('{}', 200);
+    if (path == '/version') return http.Response('{}', 200);
+    if (path == '/system/df') return http.Response('{}', 200);
+    return http.Response('[]', 200);
+  }
   @override
   Future<http.Response> post(String path,
           {Map<String, String>? query, Object? body, Map<String, String>? headers}) async =>
@@ -46,6 +51,10 @@ void main() {
     await tester.tap(find.byIcon(Icons.storage)); // Volumes destination
     await tester.pumpAndSettle();
     expect(bar().selectedIndex, 3);
+
+    await tester.tap(find.byIcon(Icons.monitor_heart)); // System destination
+    await tester.pumpAndSettle();
+    expect(bar().selectedIndex, 4);
 
     await tester.tap(find.byIcon(Icons.inventory)); // Containers destination
     await tester.pumpAndSettle();
