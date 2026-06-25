@@ -59,3 +59,13 @@ Not yet executed end-to-end on a device in this environment (no Android
 emulator / iOS simulator installed). Run this procedure once a device or
 emulator is available; the agent half has been verified against a simulated
 daemon via `go test ./...`.
+
+## TCP+TLS (mTLS) — Phase 1D-1
+
+Real socket + exec hijack path (not covered by unit tests).
+
+1. Generate a CA + server cert + client cert (see Docker's "Protect the Docker daemon socket" guide), then run dockerd with TLS verification:
+   `dockerd --tlsverify --tlscacert=ca.pem --tlscert=server-cert.pem --tlskey=server-key.pem -H=0.0.0.0:2376`
+2. In the app: Connect → **TCP+TLS**. Enter host, port `2376`, and paste `client-cert.pem`, `client-key.pem`, and `ca.pem` into the CA field. Leave **Allow insecure** OFF.
+3. Verify: the container list loads; open a container → **Logs** stream live; **Exec** opens an interactive shell (the hijack path); **System** dashboard loads.
+4. Negative check: with a wrong/empty CA and **Allow insecure** OFF, the connection fails the TLS handshake; turning **Allow insecure** ON connects (documented as insecure — MITM-vulnerable).
