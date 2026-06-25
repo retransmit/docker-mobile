@@ -69,3 +69,11 @@ Real socket + exec hijack path (not covered by unit tests).
 2. In the app: Connect → **TCP+TLS**. Enter host, port `2376`, and paste `client-cert.pem`, `client-key.pem`, and `ca.pem` into the CA field. Leave **Allow insecure** OFF.
 3. Verify: the container list loads; open a container → **Logs** stream live; **Exec** opens an interactive shell (the hijack path); **System** dashboard loads.
 4. Negative check: with a wrong/empty CA and **Allow insecure** OFF, the connection fails the TLS handshake; turning **Allow insecure** ON connects (documented as insecure — MITM-vulnerable).
+
+## SSH (dial-stdio) — Phase 1D-2a
+
+Reach over SSH (the live path; not unit-tested). Requires the `docker` CLI and docker access for the SSH user on the remote.
+
+1. Ensure `ssh user@host docker system dial-stdio` works from a terminal (proves dial-stdio + permissions).
+2. From a scratch Dart entrypoint or D2b's form, call `sshDaemonVersion(creds, verifyHostKey: (fp) { print('host key: $fp'); return true; })` with key auth, then password auth.
+3. Verify it prints the daemon `/version` JSON. Note the printed fingerprint on first use; a second connect with that fingerprint pinned should return `HostKeyVerdict.match` (wired in D2b).
