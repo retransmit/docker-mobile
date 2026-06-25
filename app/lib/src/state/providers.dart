@@ -7,6 +7,7 @@ import '../api/models/docker_image.dart';
 import '../api/models/docker_network.dart';
 import '../api/models/docker_volume.dart';
 import '../api/models/image_detail.dart';
+import '../api/models/system_info.dart';
 import '../transport/transport.dart';
 
 /// The active transport, set once the user connects. Null = not connected.
@@ -75,4 +76,14 @@ final volumeDetailProvider = FutureProvider.family<DockerVolume, String>((ref, n
   final client = ref.watch(dockerClientProvider);
   if (client == null) throw StateError('Not connected');
   return client.inspectVolume(name);
+});
+
+final systemDashboardProvider =
+    FutureProvider<({SystemInfo info, VersionInfo version, DiskUsage df})>((ref) async {
+  final client = ref.watch(dockerClientProvider);
+  if (client == null) throw StateError('Not connected');
+  final infoF = client.getInfo();
+  final versionF = client.getVersion();
+  final dfF = client.getDiskUsage();
+  return (info: await infoF, version: await versionF, df: await dfF);
 });
