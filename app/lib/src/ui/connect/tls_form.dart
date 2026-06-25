@@ -80,15 +80,21 @@ class _TlsFormState extends ConsumerState<TlsForm> {
       messenger.showSnackBar(SnackBar(content: Text('Invalid certificate: ${e.message}')));
       return;
     }
+    // Persist best-effort — a keystore failure must not block connecting or
+    // leave the transport set without navigating.
+    try {
+      await ref.read(credentialStoreProvider).saveTls(TlsCredentials(
+            host: host,
+            port: port,
+            clientCertPem: _cert.text,
+            clientKeyPem: _key.text,
+            caPem: caText.isEmpty ? null : caText,
+            insecure: _insecure,
+          ));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('Could not save credentials; connecting anyway.')));
+    }
     ref.read(transportProvider.notifier).state = transport;
-    await ref.read(credentialStoreProvider).saveTls(TlsCredentials(
-          host: host,
-          port: port,
-          clientCertPem: _cert.text,
-          clientKeyPem: _key.text,
-          caPem: caText.isEmpty ? null : caText,
-          insecure: _insecure,
-        ));
     navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
   }
 
