@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 import 'container_detail_screen.dart';
+import 'create_container_screen.dart';
 
 class ContainersScreen extends ConsumerWidget {
   const ContainersScreen({super.key});
@@ -19,6 +20,13 @@ class ContainersScreen extends ConsumerWidget {
             onPressed: () => ref.invalidate(containersProvider),
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        tooltip: 'Create container',
+        onPressed: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const CreateContainerScreen()),
+        ),
+        child: const Icon(Icons.add),
       ),
       body: containers.when(
         loading: () => const Center(child: CircularProgressIndicator()),
