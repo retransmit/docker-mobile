@@ -6,6 +6,7 @@ import '../transport/transport.dart';
 import 'models/docker_container.dart';
 import 'models/container_detail.dart';
 import 'models/container_inspect.dart';
+import 'models/container_create_config.dart';
 import 'models/exec_inspect.dart';
 import 'models/docker_image.dart';
 import 'models/docker_network.dart';
@@ -114,6 +115,16 @@ class DockerApiClient {
       throw DockerApiException(resp.statusCode, resp.body);
     }
     return ContainerDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<String> createContainer(ContainerCreateConfig config, {String? name}) async {
+    final resp = await transport.post(
+      '/containers/create',
+      query: (name == null || name.isEmpty) ? null : {'name': name},
+      body: config.toJson(),
+    );
+    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    return (jsonDecode(resp.body) as Map<String, dynamic>)['Id'] as String;
   }
 
   Future<void> startContainer(String id) async =>
