@@ -5,6 +5,7 @@ import '../connect/connection_launcher.dart';
 import '../state/providers.dart';
 import '../storage/profile_store.dart';
 import 'connection_screen.dart';
+import 'settings_screen.dart';
 
 class ProfilesScreen extends ConsumerWidget {
   const ProfilesScreen({super.key});
@@ -19,7 +20,16 @@ class ProfilesScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profiles = ref.watch(profilesProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('Connections')),
+      appBar: AppBar(
+        title: const Text('Connections'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConnectionScreen())),
         child: const Icon(Icons.add),

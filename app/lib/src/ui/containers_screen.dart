@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import '../theme/app_theme.dart';
 import 'container_detail_screen.dart';
 import 'create_container_screen.dart';
 
@@ -39,7 +40,7 @@ class ContainersScreen extends ConsumerWidget {
             return ListTile(
               leading: Icon(
                 c.state == 'running' ? Icons.play_circle : Icons.stop_circle,
-                color: c.state == 'running' ? Colors.green : Colors.grey,
+                color: c.state == 'running' ? StatusColors.of(context).running : StatusColors.of(context).stopped,
               ),
               title: Text(name),
               subtitle: Text('${c.image} · ${c.status}'),

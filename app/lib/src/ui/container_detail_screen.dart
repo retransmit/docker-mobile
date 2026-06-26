@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models/container_detail.dart';
 import '../state/providers.dart';
+import '../theme/app_theme.dart';
 import 'logs_screen.dart';
 import 'exec_screen.dart';
 import 'container_stats_screen.dart';
@@ -161,7 +162,8 @@ class _StateBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final running = state.running;
-    final color = state.paused ? Colors.orange : (running ? Colors.green : Colors.grey);
+    final status = StatusColors.of(context);
+    final color = state.paused ? status.paused : (running ? status.running : status.stopped);
     final label = state.paused ? 'paused' : state.status;
     return Row(children: [
       Icon(Icons.circle, size: 12, color: color),
