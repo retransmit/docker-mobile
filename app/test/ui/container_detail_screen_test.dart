@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_detail_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
 class _FakeTransport implements Transport {
   @override
@@ -60,7 +61,13 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('web'), findsOneWidget); // app bar title
-    expect(find.textContaining('nginx'), findsWidgets); // image shown
+    // hero shows the status via a StatusPill and the image via MonoText
+    expect(find.byType(StatusPill), findsOneWidget);
+    expect(find.textContaining('nginx'), findsWidgets); // image shown (hero, once)
+    // primary actions present and grouped at the top
+    expect(find.widgetWithText(FilledButton, 'Logs'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Exec'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Stats'), findsOneWidget);
     expect(find.widgetWithText(ElevatedButton, 'Start'), findsOneWidget);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Start'));
