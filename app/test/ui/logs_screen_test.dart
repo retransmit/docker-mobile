@@ -14,6 +14,8 @@ List<int> frame(int type, List<int> p) {
 }
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<int>? logBytes;
   _FakeTransport({this.logBytes});
 

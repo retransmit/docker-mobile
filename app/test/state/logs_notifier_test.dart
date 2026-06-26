@@ -11,6 +11,8 @@ import 'package:docker_mobile/src/state/logs_notifier.dart';
 /// Returns a fresh single-subscription stream of [chunks] on every call,
 /// so re-subscribing (follow/tail/timestamps changes) works.
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<List<int>> chunks;
   _FakeTransport(this.chunks);
   @override
@@ -35,6 +37,8 @@ class _FakeTransport implements Transport {
 /// Streams whatever is pushed into [controller], so tests can drive bytes,
 /// errors, and pause/cancel timing explicitly.
 class _ControllerTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final StreamController<List<int>> controller;
   _ControllerTransport(this.controller);
   @override

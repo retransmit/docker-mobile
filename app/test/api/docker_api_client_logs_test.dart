@@ -7,6 +7,8 @@ import 'package:docker_mobile/src/api/stdcopy.dart';
 import 'package:docker_mobile/src/api/docker_api_client.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final http.Response getResponse;
   final List<List<int>> streamChunks;
   String? lastStreamPath;

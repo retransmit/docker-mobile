@@ -97,6 +97,9 @@ class TlsTransport implements Transport {
     }
     return opener(execId, cols, rows);
   }
+
+  @override
+  Future<void> close() async => _client.close();
 }
 
 /// Hijacks `POST /exec/{id}/start` and returns the detached socket as a duplex

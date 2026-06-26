@@ -5,6 +5,8 @@ import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/api/models/docker_network.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   Object? lastPostBody;
   String? lastPostPath;
   final List<String> deletes = [];

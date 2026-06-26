@@ -8,6 +8,8 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/create_container_screen.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<String> posts = [];
   int createStatus = 201;
   List<int> pullBytes = utf8.encode('{"status":"Pull complete"}\n');

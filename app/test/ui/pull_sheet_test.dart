@@ -8,6 +8,8 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/pull_sheet.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<int> pullBytes;
   Map<String, String>? lastPullQuery;
   _FakeTransport(this.pullBytes);

@@ -11,6 +11,8 @@ class _Rec {
 }
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<_Rec> calls = [];
   int postStatus = 204;
   int deleteStatus = 204;

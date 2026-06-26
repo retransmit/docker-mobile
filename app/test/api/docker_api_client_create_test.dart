@@ -12,6 +12,8 @@ class _Rec {
 }
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<_Rec> posts = [];
   int createStatus = 201;
   String createBody = '{"Id":"abc123"}';

@@ -37,4 +37,7 @@ abstract class Transport {
 
   /// Streamed POST (e.g. image pull/build/load progress). Cancel closes it.
   Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body});
+
+  /// Closes the underlying client/connection. Best-effort; safe to call once.
+  Future<void> close();
 }

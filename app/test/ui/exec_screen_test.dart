@@ -20,6 +20,8 @@ class _FakeExecChannel implements ExecChannel {
 }
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final _FakeExecChannel channel;
   _FakeTransport(this.channel);
   @override

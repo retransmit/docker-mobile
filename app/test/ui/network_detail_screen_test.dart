@@ -7,6 +7,8 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/network_detail_screen.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<String> deletes = [];
   @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response(
