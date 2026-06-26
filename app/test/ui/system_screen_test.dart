@@ -71,4 +71,35 @@ void main() {
 
     expect(t.posts, containsAll(<String>['/containers/prune', '/networks/prune', '/images/prune', '/build/prune', '/volumes/prune']));
   });
+
+  testWidgets('Disconnect action confirms then nulls the transport', (tester) async {
+    final t = _FakeTransport();
+    late ProviderContainer container;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [transportProvider.overrideWith((ref) => t)],
+      child: MaterialApp(
+        home: Builder(builder: (ctx) {
+          container = ProviderScope.containerOf(ctx);
+          return Scaffold(
+            body: Center(child: ElevatedButton(
+              onPressed: () => Navigator.of(ctx).push(
+                  MaterialPageRoute(builder: (_) => const SystemScreen())),
+              child: const Text('open'),
+            )),
+          );
+        }),
+      ),
+    ));
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.logout));
+    await tester.pumpAndSettle();
+    expect(find.text('Disconnect from this daemon?'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Disconnect'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(transportProvider), isNull);
+    expect(find.text('open'), findsOneWidget); // popped back
+  });
 }

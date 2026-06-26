@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../connect/disconnect.dart';
 import '../state/providers.dart';
 
 String _humanSize(int bytes) {
@@ -21,7 +22,27 @@ class SystemScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('System'),
-        actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(systemDashboardProvider))],
+        actions: [
+          IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(systemDashboardProvider)),
+          IconButton(
+            icon: const Icon(Icons.logout),
+            tooltip: 'Disconnect',
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Disconnect'),
+                  content: const Text('Disconnect from this daemon?'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                    TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Disconnect')),
+                  ],
+                ),
+              );
+              if (confirmed == true && context.mounted) await disconnect(context, ref);
+            },
+          ),
+        ],
       ),
       body: dash.when(
         loading: () => const Center(child: CircularProgressIndicator()),
