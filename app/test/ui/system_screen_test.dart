@@ -52,6 +52,14 @@ void main() {
     expect(find.widgetWithText(StatCard, '3'), findsOneWidget); // containersRunning value
     expect(find.textContaining('27.0.3'), findsWidgets); // server version
     expect(find.textContaining('overlay2'), findsWidgets); // storage driver
+
+    // a disk-usage size renders in monospace
+    await tester.scrollUntilVisible(find.text('Total'), 200,
+        scrollable: find.byType(Scrollable).first);
+    expect(find.byType(MonoText), findsWidgets);
+    final sizeText = tester.widget<Text>(
+        find.descendant(of: find.byType(MonoText), matching: find.byType(Text)).first);
+    expect(sizeText.style?.fontFamily, 'monospace');
   });
 
   testWidgets('System prune with both toggles runs the full sequence', (tester) async {
