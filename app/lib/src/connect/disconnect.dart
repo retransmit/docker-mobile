@@ -11,5 +11,9 @@ Future<void> disconnect(BuildContext context, WidgetRef ref) async {
   final transport = ref.read(transportProvider);
   navigator.popUntil((r) => r.isFirst);
   ref.read(transportProvider.notifier).state = null;
-  await transport?.close();
+  // Best-effort teardown: the UI is already back at the list, so a close
+  // failure must not surface as an unhandled async error.
+  try {
+    await transport?.close();
+  } catch (_) {}
 }
