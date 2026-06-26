@@ -38,6 +38,15 @@ class TlsCredentials {
       );
 }
 
+class AgentCredentials {
+  final String baseUri;
+  final String token;
+  const AgentCredentials({required this.baseUri, required this.token});
+  Map<String, dynamic> toJson() => {'baseUri': baseUri, 'token': token};
+  factory AgentCredentials.fromJson(Map<String, dynamic> json) =>
+      AgentCredentials(baseUri: json['baseUri'] as String, token: json['token'] as String? ?? '');
+}
+
 enum SshAuthMethod { password, key }
 
 class SshCredentials {
