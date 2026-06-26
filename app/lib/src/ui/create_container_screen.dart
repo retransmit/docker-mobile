@@ -102,10 +102,21 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
         }
         id = await client.createContainer(config, name: name.isEmpty ? null : name);
       }
-      if (_start) await client.startContainer(id);
+      // The container is created at this point; a start failure must not read
+      // as a total failure (and must still refresh the list).
+      String? startError;
+      if (_start) {
+        try {
+          await client.startContainer(id);
+        } catch (e) {
+          startError = '$e';
+        }
+      }
+      if (!mounted) return; // guard the ref/messenger/navigator after the awaits
       ref.invalidate(containersProvider);
-      if (!mounted) return;
-      messenger.showSnackBar(const SnackBar(content: Text('Container created.')));
+      messenger.showSnackBar(SnackBar(
+        content: Text(startError == null ? 'Container created.' : 'Created, but failed to start: $startError'),
+      ));
       navigator.pop();
     } catch (e) {
       if (mounted) setState(() => _busy = false);
@@ -246,5 +257,15 @@ class _PullProgressDialogState extends State<_PullProgressDialog> {
           const SizedBox(width: 16),
           Expanded(child: Text(_error ?? _status)),
         ]),
+        actions: [
+          // Escape hatch for a stalled pull (e.g. a hung SSH dial-stdio stream).
+          TextButton(
+            onPressed: () {
+              _sub?.cancel();
+              Navigator.of(context).pop(false);
+            },
+            child: const Text('Cancel'),
+          ),
+        ],
       );
 }
