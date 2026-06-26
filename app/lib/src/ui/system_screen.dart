@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../connect/disconnect.dart';
 import '../state/providers.dart';
+import 'events_screen.dart';
 
 String _humanSize(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -24,6 +25,13 @@ class SystemScreen extends ConsumerWidget {
         title: const Text('System'),
         actions: [
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(systemDashboardProvider)),
+          IconButton(
+            icon: const Icon(Icons.bolt),
+            tooltip: 'Events',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const EventsScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.logout),
             tooltip: 'Disconnect',
