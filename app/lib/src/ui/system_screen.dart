@@ -89,18 +89,18 @@ class SystemScreen extends ConsumerWidget {
                     ),
                     const SizedBox(height: 16),
                     _card('Daemon', [
-                      _kv('Version', info.serverVersion),
-                      _kv('API', v.apiVersion),
-                      _kv('OS / Arch', '${info.osType} / ${info.architecture}'),
-                      _kv('Kernel', info.kernelVersion),
-                      _kv('CPUs', '${info.ncpu}'),
-                      _kv('Memory', _humanSize(info.memTotal)),
-                      _kv('Storage driver', info.storageDriver),
+                      _kv2(context, 'Version', info.serverVersion),
+                      _kv2(context, 'API', v.apiVersion),
+                      _kv2(context, 'OS / Arch', '${info.osType} / ${info.architecture}'),
+                      _kv2(context, 'Kernel', info.kernelVersion),
+                      _kv2(context, 'CPUs', '${info.ncpu}'),
+                      _kv2(context, 'Memory', _humanSize(info.memTotal)),
+                      _kv2(context, 'Storage driver', info.storageDriver),
                     ]),
                     _card('Disk usage', [
                       for (final c in [df.images, df.containers, df.volumes, df.buildCache])
-                        _kv('${c.name} (${c.count})', _humanSize(c.size)),
-                      _kv('Total', _humanSize(df.total)),
+                        _kv2(context, '${c.name} (${c.count})', _humanSize(c.size), mono: true),
+                      _kv2(context, 'Total', _humanSize(df.total), mono: true),
                     ]),
                   ],
                 ),
@@ -162,13 +162,21 @@ class SystemScreen extends ConsumerWidget {
         ),
       );
 
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(children: [
-          SizedBox(width: 130, child: Text(k)),
-          Expanded(child: Text(v, style: const TextStyle(fontWeight: FontWeight.w500))),
-        ]),
-      );
+  Widget _kv2(BuildContext context, String label, String value, {bool mono = false}) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+          const SizedBox(height: 2),
+          mono ? MonoText(value, style: text.bodyMedium) : Text(value, style: text.bodyMedium),
+        ],
+      ),
+    );
+  }
 }
 
 /// Returns (allImages, includeVolumes), or null if cancelled.
