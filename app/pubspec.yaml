@@ -46,6 +46,7 @@ dependencies:
   crypto: ^3.0.7
   dartssh2: ^2.18.0
   fl_chart: ^1.2.0
+  dynamic_color: ^1.8.1
 
 dev_dependencies:
   flutter_test:
