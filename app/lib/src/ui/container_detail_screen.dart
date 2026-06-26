@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/models/container_detail.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
+import 'widgets/resource_widgets.dart';
 import 'logs_screen.dart';
 import 'exec_screen.dart';
 import 'container_stats_screen.dart';
@@ -55,22 +56,81 @@ class _Body extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final client = ref.read(dockerClientProvider)!;
     final s = detail.state;
+    final status = StatusColors.of(context);
+    final color = s.paused ? status.paused : (s.running ? status.running : status.stopped);
+    final label = s.paused
+        ? 'paused'
+        : (!s.running && s.exitCode != null ? '${s.status} (exit ${s.exitCode})' : s.status);
+    final text = Theme.of(context).textTheme;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _StateBadge(state: s),
-        const SizedBox(height: 12),
-        _kv('Image', detail.image),
-        if (detail.command.isNotEmpty) _kv('Command', detail.command),
-        if (detail.created.isNotEmpty) _kv('Created', detail.created),
-        if (detail.restartPolicy.isNotEmpty) _kv('Restart policy', detail.restartPolicy),
-        if (detail.networks.isNotEmpty) _kv('Networks', detail.networks.join(', ')),
-        if (detail.ports.isNotEmpty)
-          _kv('Ports', detail.ports.map((p) => '${p.publicPort != null ? '${p.publicPort}->' : ''}${p.privatePort}/${p.type}').join(', ')),
+        // Hero
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                StatusPill(label: label, color: color),
+                const SizedBox(height: 12),
+                MonoText(detail.image, maxLines: 2, overflow: TextOverflow.ellipsis, style: text.bodyMedium),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Promoted read-only actions
+        Row(
+          children: [
+            Expanded(child: FilledButton.tonalIcon(
+              icon: const Icon(Icons.article),
+              label: const Text('Logs'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => LogsScreen(containerId: containerId, containerName: containerName))),
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: FilledButton.tonalIcon(
+              icon: const Icon(Icons.terminal),
+              label: const Text('Exec'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ExecScreen(containerId: containerId, containerName: containerName))),
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: FilledButton.tonalIcon(
+              icon: const Icon(Icons.monitor_heart),
+              label: const Text('Stats'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ContainerStatsScreen(containerId: containerId, containerName: containerName))),
+            )),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Configuration
+        if (detail.created.isNotEmpty || detail.command.isNotEmpty || detail.restartPolicy.isNotEmpty)
+          _InfoCard('Configuration', [
+            if (detail.created.isNotEmpty) _InfoRow('Created', detail.created),
+            if (detail.command.isNotEmpty) _InfoRow('Command', detail.command, mono: true),
+            if (detail.restartPolicy.isNotEmpty) _InfoRow('Restart policy', detail.restartPolicy),
+          ]),
+        // Networking
+        if (detail.networks.isNotEmpty || detail.ports.isNotEmpty)
+          _InfoCard('Networking', [
+            if (detail.networks.isNotEmpty) _InfoRow('Networks', detail.networks.join(', ')),
+            if (detail.ports.isNotEmpty)
+              _InfoRow('Ports',
+                  detail.ports.map((p) => '${p.publicPort != null ? '${p.publicPort}->' : ''}${p.privatePort}/${p.type}').join(', '),
+                  mono: true),
+          ]),
+        // Storage
         if (detail.mounts.isNotEmpty)
-          _kv('Mounts', detail.mounts.map((m) => '${m.source}:${m.destination}${m.rw ? '' : ' (ro)'}').join('\n')),
-        if (detail.env.isNotEmpty) _kv('Env', detail.env.join('\n')),
-        const Divider(height: 32),
+          _InfoCard('Storage', [
+            _InfoRow('Mounts', detail.mounts.map((m) => '${m.source}:${m.destination}${m.rw ? '' : ' (ro)'}').join('\n'), mono: true),
+          ]),
+        // Environment (collapsed)
+        if (detail.env.isNotEmpty) _EnvCard(env: detail.env),
+        const SizedBox(height: 8),
+        // Lifecycle actions (restyled in Task 2)
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -115,62 +175,8 @@ class _Body extends ConsumerWidget {
             ),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(child: OutlinedButton.icon(
-              icon: const Icon(Icons.article),
-              label: const Text('Logs'),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => LogsScreen(containerId: containerId, containerName: containerName))),
-            )),
-            const SizedBox(width: 8),
-            Expanded(child: OutlinedButton.icon(
-              icon: const Icon(Icons.terminal),
-              label: const Text('Exec'),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ExecScreen(containerId: containerId, containerName: containerName))),
-            )),
-            const SizedBox(width: 8),
-            Expanded(child: OutlinedButton.icon(
-              icon: const Icon(Icons.monitor_heart),
-              label: const Text('Stats'),
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ContainerStatsScreen(containerId: containerId, containerName: containerName))),
-            )),
-          ],
-        ),
       ],
     );
-  }
-
-  Widget _kv(String k, String v) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(width: 110, child: Text(k, style: const TextStyle(fontWeight: FontWeight.bold))),
-            Expanded(child: Text(v)),
-          ],
-        ),
-      );
-}
-
-class _StateBadge extends StatelessWidget {
-  final ContainerStateInfo state;
-  const _StateBadge({required this.state});
-  @override
-  Widget build(BuildContext context) {
-    final running = state.running;
-    final status = StatusColors.of(context);
-    final color = state.paused ? status.paused : (running ? status.running : status.stopped);
-    final label = state.paused ? 'paused' : state.status;
-    return Row(children: [
-      Icon(Icons.circle, size: 12, color: color),
-      const SizedBox(width: 8),
-      Text(label, style: const TextStyle(fontWeight: FontWeight.bold)),
-      if (!running && state.exitCode != null) Text('  (exit ${state.exitCode})'),
-    ]);
   }
 }
 
@@ -242,4 +248,74 @@ Future<(bool, bool)?> _removeDialog(BuildContext context) {
       ),
     ),
   );
+}
+
+class _InfoCard extends StatelessWidget {
+  final String title;
+  final List<Widget> children;
+  const _InfoCard(this.title, this.children);
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final bool mono;
+  const _InfoRow(this.label, this.value, {this.mono = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+          const SizedBox(height: 2),
+          mono
+              ? MonoText(value, style: text.bodyMedium)
+              : Text(value, style: text.bodyMedium),
+        ],
+      ),
+    );
+  }
+}
+
+class _EnvCard extends StatelessWidget {
+  final List<String> env;
+  const _EnvCard({required this.env});
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          title: Text('Environment (${env.length})', style: text.titleMedium),
+          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          children: [for (final e in env) MonoText(e, style: text.bodySmall)],
+        ),
+      ),
+    );
+  }
 }
