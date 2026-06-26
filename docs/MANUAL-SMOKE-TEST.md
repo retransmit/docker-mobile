@@ -77,3 +77,10 @@ Reach over SSH (the live path; not unit-tested). Requires the `docker` CLI and d
 1. Ensure `ssh user@host docker system dial-stdio` works from a terminal (proves dial-stdio + permissions).
 2. From a scratch Dart entrypoint or D2b's form, call `sshDaemonVersion(creds, verifyHostKey: (fp) { print('host key: $fp'); return true; })` with key auth, then password auth.
 3. Verify it prints the daemon `/version` JSON. Note the printed fingerprint on first use; a second connect with that fingerprint pinned should return `HostKeyVerdict.match` (wired in D2b).
+
+### Phase 1D-2b — SSH end-to-end via the form
+
+1. Connect → **SSH**. Enter host, port `22`, username; pick **Key** (paste a PEM, optional passphrase) or **Password**.
+2. First connect: accept the host key (it is pinned). The container list loads over SSH; open a container → **Logs** stream; **Exec** opens an interactive shell (dial-stdio hijack); **System** loads.
+3. Reconnect: the pinned key matches silently.
+4. Change the server's host key (or pin a wrong one) and reconnect: the **"Host key changed"** dialog appears; **Cancel** aborts, **Trust new key** re-pins and connects.
