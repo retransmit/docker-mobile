@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'create_container_screen.dart';
 
 class ImageDetailScreen extends ConsumerWidget {
   final String imageId;
@@ -40,6 +41,12 @@ class ImageDetailScreen extends ConsumerWidget {
             if (d.env.isNotEmpty) Text('Env: ${d.env.join('\n')}'),
             const Divider(height: 24),
             Wrap(spacing: 8, children: [
+              FilledButton(
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => CreateContainerScreen(image: title)),
+                ),
+                child: const Text('Run'),
+              ),
               OutlinedButton(
                 onPressed: () async {
                   final t = await _tagDialog(context);
