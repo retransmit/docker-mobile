@@ -5,6 +5,7 @@ import '../api/models/container_detail.dart';
 import '../state/providers.dart';
 import 'logs_screen.dart';
 import 'exec_screen.dart';
+import 'container_stats_screen.dart';
 
 class ContainerDetailScreen extends ConsumerWidget {
   final String containerId;
@@ -128,6 +129,13 @@ class _Body extends ConsumerWidget {
               label: const Text('Exec'),
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
                   builder: (_) => ExecScreen(containerId: containerId, containerName: containerName))),
+            )),
+            const SizedBox(width: 8),
+            Expanded(child: OutlinedButton.icon(
+              icon: const Icon(Icons.monitor_heart),
+              label: const Text('Stats'),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => ContainerStatsScreen(containerId: containerId, containerName: containerName))),
             )),
           ],
         ),
