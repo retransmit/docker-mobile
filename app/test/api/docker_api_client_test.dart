@@ -4,6 +4,8 @@ import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/api/docker_api_client.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final http.Response response;
   String? lastPath;
   Map<String, String>? lastQuery;

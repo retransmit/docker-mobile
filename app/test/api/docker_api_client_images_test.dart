@@ -12,6 +12,8 @@ class _Rec {
 }
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<_Rec> calls = [];
   http.Response getResponse = http.Response('[]', 200);
   int postStatus = 200;

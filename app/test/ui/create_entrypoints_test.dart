@@ -10,6 +10,8 @@ import 'package:docker_mobile/src/ui/create_container_screen.dart';
 
 class _FakeTransport implements Transport {
   @override
+  Future<void> close() async {}
+  @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async {
     if (path.contains('/history')) return http.Response('[]', 200);
     if (path.startsWith('/images/')) {

@@ -110,6 +110,6 @@ Future<void> _launchSsh(BuildContext context, WidgetRef ref, ConnectionProfile p
     }
     ref.invalidate(profilesProvider);
   }
-  ref.read(transportProvider.notifier).state = SshTransport(openDuplex: conn.openChannel);
+  ref.read(transportProvider.notifier).state = SshTransport(openDuplex: conn.openChannel, onClose: conn.close);
   navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
 }

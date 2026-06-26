@@ -121,6 +121,9 @@ class AgentTransport implements Transport {
     await channel.ready;
     return _WebSocketExecChannel(channel);
   }
+
+  @override
+  Future<void> close() async => _client.close();
 }
 
 class _WebSocketExecChannel implements ExecChannel {

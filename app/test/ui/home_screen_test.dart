@@ -8,6 +8,8 @@ import 'package:docker_mobile/src/ui/home_screen.dart';
 
 class _FakeTransport implements Transport {
   @override
+  Future<void> close() async {}
+  @override
   Future<http.Response> get(String path, {Map<String, String>? query}) async {
     if (path == '/info') return http.Response('{}', 200);
     if (path == '/version') return http.Response('{}', 200);

@@ -1,3 +1,6 @@
+// The public `openDuplex`/`onClose` params map to private fields, so an
+// initializing formal would be a private named param — which Dart forbids.
+// ignore_for_file: prefer_initializing_formals
 import 'dart:async';
 import 'dart:convert';
 
@@ -15,8 +18,10 @@ String _pathWithQuery(String path, Map<String, String>? query) =>
 /// channel ([Duplex]) over a shared SSH connection. No bearer token.
 class SshTransport implements Transport {
   final Future<Duplex> Function() _openDuplex;
-  // ignore: prefer_initializing_formals — keep the public `openDuplex` param name.
-  SshTransport({required Future<Duplex> Function() openDuplex}) : _openDuplex = openDuplex;
+  final Future<void> Function()? _onClose;
+  SshTransport({required Future<Duplex> Function() openDuplex, Future<void> Function()? onClose})
+      : _openDuplex = openDuplex,
+        _onClose = onClose;
 
   Future<http.Response> _send(String method, String path,
       {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
@@ -146,4 +151,7 @@ class SshTransport implements Transport {
       rethrow;
     }
   }
+
+  @override
+  Future<void> close() async => await _onClose?.call();
 }

@@ -7,6 +7,8 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_detail_screen.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final String status; // container State.Status
   final bool running;
   final bool paused;

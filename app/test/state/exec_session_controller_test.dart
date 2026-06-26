@@ -30,6 +30,8 @@ class _Post {
 }
 
 class _ExecFakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   final List<_FakeExecChannel> channels = [];
   final List<_Post> posts = [];
   final int exitCode;

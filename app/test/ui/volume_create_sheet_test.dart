@@ -7,6 +7,8 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/volume_create_sheet.dart';
 
 class _FakeTransport implements Transport {
+  @override
+  Future<void> close() async {}
   Map<String, dynamic>? createBody;
   int createStatus = 201;
   @override
