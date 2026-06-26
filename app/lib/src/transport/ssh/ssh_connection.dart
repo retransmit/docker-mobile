@@ -100,7 +100,15 @@ class RealSshConnection implements SshConnection {
           verifyHostKey(_stripSha256Prefix(String.fromCharCodes(fingerprint))),
     );
     _client = client;
-    await client.authenticated; // forces handshake + host-key callback + auth
+    try {
+      await client.authenticated; // forces handshake + host-key callback + auth
+    } catch (_) {
+      // Auth / host-key-mismatch / post-handshake failure: reclaim the socket
+      // rather than leaving a live client (and a channel to a suspicious host).
+      client.close();
+      _client = null;
+      rethrow;
+    }
   }
 
   @override
