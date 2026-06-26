@@ -68,9 +68,9 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Logs'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Exec'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Stats'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Start'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Start'), findsOneWidget);
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Start'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Start'));
     await tester.pumpAndSettle();
     expect(t.posts, contains('/containers/a/start'));
     expect(find.byType(SnackBar), findsOneWidget);
@@ -81,11 +81,15 @@ void main() {
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(ElevatedButton, 'Start'), findsNothing);
-    expect(find.widgetWithText(ElevatedButton, 'Stop'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Restart'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Pause'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Unpause'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Start'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Stop'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Restart'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Pause'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Unpause'), findsNothing);
+    // actions live under a titled card
+    expect(find.widgetWithText(Card, 'Actions'), findsOneWidget);
+    // Remove is now a FilledButton (error styled)
+    expect(find.widgetWithText(FilledButton, 'Remove'), findsOneWidget);
   });
 
   testWidgets('a paused container offers Unpause and hides Stop/Pause', (tester) async {
@@ -93,9 +97,9 @@ void main() {
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
-    expect(find.widgetWithText(ElevatedButton, 'Unpause'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Pause'), findsNothing);
-    expect(find.widgetWithText(ElevatedButton, 'Stop'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Unpause'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Pause'), findsNothing);
+    expect(find.widgetWithText(FilledButton, 'Stop'), findsNothing);
   });
 
   testWidgets('Remove opens a confirmation dialog and confirming calls delete', (tester) async {
@@ -103,7 +107,7 @@ void main() {
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Remove'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Remove'));
     await tester.pumpAndSettle();
     expect(find.byType(AlertDialog), findsOneWidget);
     expect(find.text('Force'), findsOneWidget);
@@ -120,7 +124,7 @@ void main() {
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.widgetWithText(ElevatedButton, 'Start'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Start'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Failed'), findsOneWidget);
   });
