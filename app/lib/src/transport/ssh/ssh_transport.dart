@@ -80,9 +80,14 @@ class SshTransport implements Transport {
         resp.body.listen(
           controller.add,
           // After a cancel we close the duplex; the framing reader then sees a
-          // premature EOF and throws. Swallow that teardown noise.
-          onError: (Object e, StackTrace st) {
-            if (!cancelled) controller.addError(e, st);
+          // premature EOF and throws — swallow that teardown noise (onCancel
+          // already closed the channel). A genuine mid-stream error must close
+          // the controller AND the channel, mirroring onDone.
+          onError: (Object e, StackTrace st) async {
+            if (cancelled) return;
+            controller.addError(e, st);
+            await controller.close();
+            await conn!.close();
           },
           onDone: () async {
             if (cancelled) return;
@@ -120,14 +125,25 @@ class SshTransport implements Transport {
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
     final conn = await _openDuplex();
-    writeHttpRequest(
-      conn.add,
-      method: 'POST',
-      path: '/exec/$execId/start',
-      headers: {'Connection': 'Upgrade', 'Upgrade': 'tcp', 'Content-Type': 'application/json'},
-      body: utf8.encode(jsonEncode({'Detach': false, 'Tty': true})),
-    );
-    final resp = await readHttpResponse(conn.input);
-    return SocketExecChannel(input: resp.body, onSend: conn.add, onClose: conn.close);
+    try {
+      writeHttpRequest(
+        conn.add,
+        method: 'POST',
+        path: '/exec/$execId/start',
+        headers: {'Connection': 'Upgrade', 'Upgrade': 'tcp', 'Content-Type': 'application/json'},
+        body: utf8.encode(jsonEncode({'Detach': false, 'Tty': true})),
+      );
+      final resp = await readHttpResponse(conn.input);
+      // A successful hijack is 101 (Upgrade) or a 2xx; anything >=400 is an
+      // error body, not a duplex — surface it instead of returning a dead channel.
+      if (resp.statusCode >= 400) {
+        final body = await resp.body.expand((c) => c).toList();
+        throw TransportException(resp.statusCode, utf8.decode(body, allowMalformed: true));
+      }
+      return SocketExecChannel(input: resp.body, onSend: conn.add, onClose: conn.close);
+    } catch (_) {
+      await conn.close(); // never leak the dial-stdio channel on a failed upgrade
+      rethrow;
+    }
   }
 }

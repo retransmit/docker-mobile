@@ -106,6 +106,7 @@ class _SshFormState extends ConsumerState<SshForm> {
     try {
       await conn.connect(verifyHostKey: verifier);
     } catch (e) {
+      await conn.close(); // reclaim the failed SSH client/socket (esp. on a host-key mismatch)
       if (!mounted) return;
       setState(() => _connecting = false);
       if (mismatch && presented != null) {
@@ -136,6 +137,10 @@ class _SshFormState extends ConsumerState<SshForm> {
     try {
       await ref.read(credentialStoreProvider).saveSsh(_buildCreds(newPin));
     } catch (_) {}
+    if (!mounted) {
+      await conn.close(); // disposed mid-connect — don't leak the live client
+      return;
+    }
     ref.read(transportProvider.notifier).state = SshTransport(openDuplex: conn.openChannel);
     navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
   }
