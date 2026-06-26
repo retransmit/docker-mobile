@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import 'network_create_sheet.dart';
 import 'network_detail_screen.dart';
+import 'widgets/resource_widgets.dart';
 
 class NetworksScreen extends ConsumerWidget {
   const NetworksScreen({super.key});
@@ -31,12 +32,18 @@ class NetworksScreen extends ConsumerWidget {
           itemCount: list.length,
           itemBuilder: (context, i) {
             final n = list[i];
-            return ListTile(
-              leading: const Icon(Icons.hub),
-              title: Text(n.name),
-              subtitle: Text('${n.driver} · ${n.scope}'),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => NetworkDetailScreen(networkId: n.id, title: n.name))),
+            return Card(
+              child: ListTile(
+                leading: const LeadingAvatar(icon: Icons.hub),
+                title: Text(n.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Row(children: [MetaChip(n.driver), const SizedBox(width: 8), MetaChip(n.scope)]),
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => NetworkDetailScreen(networkId: n.id, title: n.name)),
+                ),
+              ),
             );
           },
         ),

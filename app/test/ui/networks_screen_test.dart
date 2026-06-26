@@ -40,6 +40,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('mynet'), findsOneWidget);
+    expect(find.text('bridge'), findsOneWidget); // driver chip
+    expect(find.text('local'), findsOneWidget); // scope chip
 
     await tester.tap(find.byIcon(Icons.cleaning_services));
     await tester.pumpAndSettle();

@@ -40,6 +40,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('nginx:latest'), findsOneWidget);
+    expect(find.text('sha256:abc'), findsOneWidget); // short id mono subtitle
+    expect(find.text('1.0 MB'), findsOneWidget); // size meta chip
 
     await tester.tap(find.byIcon(Icons.cleaning_services));
     await tester.pumpAndSettle();
