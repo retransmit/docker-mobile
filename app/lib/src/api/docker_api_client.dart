@@ -7,6 +7,7 @@ import 'models/docker_container.dart';
 import 'models/container_detail.dart';
 import 'models/container_inspect.dart';
 import 'models/container_create_config.dart';
+import 'models/container_stats.dart';
 import 'models/exec_inspect.dart';
 import 'models/docker_image.dart';
 import 'models/docker_network.dart';
@@ -328,5 +329,26 @@ class DockerApiClient {
     await pruneImages(danglingOnly: !allImages);
     await pruneBuildCache();
     if (includeVolumes) await pruneVolumes();
+  }
+
+  Stream<ContainerStats> streamContainerStats(String id) async* {
+    final raw = transport.stream('/containers/$id/stats', query: {'stream': 'true'});
+    final buffer = <int>[];
+    await for (final chunk in raw) {
+      buffer.addAll(chunk);
+      var nl = buffer.indexOf(0x0A);
+      while (nl != -1) {
+        final line = utf8.decode(buffer.sublist(0, nl), allowMalformed: true).trim();
+        buffer.removeRange(0, nl + 1);
+        if (line.isNotEmpty) {
+          try {
+            yield ContainerStats.fromJson(jsonDecode(line) as Map<String, dynamic>);
+          } catch (_) {
+            // skip a malformed/partial line
+          }
+        }
+        nl = buffer.indexOf(0x0A);
+      }
+    }
   }
 }
