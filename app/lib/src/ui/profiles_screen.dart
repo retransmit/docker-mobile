@@ -6,6 +6,7 @@ import '../state/providers.dart';
 import '../storage/profile_store.dart';
 import 'connection_screen.dart';
 import 'settings_screen.dart';
+import 'widgets/resource_widgets.dart';
 
 class ProfilesScreen extends ConsumerWidget {
   const ProfilesScreen({super.key});
@@ -42,25 +43,32 @@ class ProfilesScreen extends ConsumerWidget {
             : ListView(
                 children: [
                   for (final p in list)
-                    ListTile(
-                      leading: Icon(_icon(p.kind)),
-                      title: Text(p.name),
-                      subtitle: Text('${p.kind.name} · ${p.host}'),
-                      onTap: () => launchConnection(context, ref, p),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) async {
-                          if (v == 'edit') {
-                            await Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => ConnectionScreen(editing: p)));
-                          } else if (v == 'delete') {
-                            await ref.read(profileStoreProvider).delete(p.id);
-                            ref.invalidate(profilesProvider);
-                          }
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'edit', child: Text('Edit')),
-                          PopupMenuItem(value: 'delete', child: Text('Delete')),
-                        ],
+                    Card(
+                      child: ListTile(
+                        leading: LeadingAvatar(icon: _icon(p.kind)),
+                        title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        subtitle: Row(
+                          children: [
+                            MetaChip(p.kind.name),
+                            const SizedBox(width: 8),
+                            Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
+                          ],
+                        ),
+                        onTap: () => launchConnection(context, ref, p),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (v) async {
+                            if (v == 'edit') {
+                              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ConnectionScreen(editing: p)));
+                            } else if (v == 'delete') {
+                              await ref.read(profileStoreProvider).delete(p.id);
+                              ref.invalidate(profilesProvider);
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        ),
                       ),
                     ),
                 ],
