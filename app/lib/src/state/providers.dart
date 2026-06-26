@@ -9,6 +9,7 @@ import '../api/models/docker_volume.dart';
 import '../api/models/image_detail.dart';
 import '../api/models/system_info.dart';
 import '../storage/credential_store.dart';
+import '../storage/profile_store.dart';
 import '../transport/ssh/ssh_connection.dart';
 import '../transport/transport.dart';
 
@@ -17,6 +18,12 @@ final transportProvider = StateProvider<Transport?>((ref) => null);
 
 /// The secure credential store (overridden with an in-memory fake in tests).
 final credentialStoreProvider = Provider<CredentialStore>((ref) => SecureCredentialStore());
+
+/// The saved connection profiles store (overridden with an in-memory fake in tests).
+final profileStoreProvider = Provider<ProfileStore>((ref) => SecureProfileStore());
+
+/// The list of saved connection profiles.
+final profilesProvider = FutureProvider<List<ConnectionProfile>>((ref) => ref.watch(profileStoreProvider).list());
 
 /// Factory for an SSH connection to a host (overridden with a fake in tests).
 final sshConnectionFactoryProvider =
