@@ -1,19 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../connect/connection_launcher.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
-import '../../transport/ssh/host_key.dart';
-import '../../transport/ssh/ssh_transport.dart';
-import '../home_screen.dart';
+import '../../storage/profile_store.dart';
 
 class SshForm extends ConsumerStatefulWidget {
-  const SshForm({super.key});
+  final ConnectionProfile? editing;
+  const SshForm({super.key, this.editing});
   @override
   ConsumerState<SshForm> createState() => _SshFormState();
 }
 
 class _SshFormState extends ConsumerState<SshForm> {
+  final _name = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController(text: '22');
   final _username = TextEditingController();
@@ -22,31 +23,28 @@ class _SshFormState extends ConsumerState<SshForm> {
   final _passphrase = TextEditingController();
   SshAuthMethod _authMethod = SshAuthMethod.password;
   String? _pinnedHostKey;
-  bool _connecting = false;
 
   @override
   void initState() {
     super.initState();
-    _prefill();
-  }
-
-  Future<void> _prefill() async {
-    final creds = await ref.read(credentialStoreProvider).loadSsh();
-    if (creds == null || !mounted) return;
-    setState(() {
-      _host.text = creds.host;
-      _port.text = '${creds.port}';
-      _username.text = creds.username;
-      _authMethod = creds.authMethod;
-      _password.text = creds.password ?? '';
-      _key.text = creds.privateKeyPem ?? '';
-      _passphrase.text = creds.passphrase ?? '';
-      _pinnedHostKey = creds.pinnedHostKey;
-    });
+    final e = widget.editing;
+    if (e?.ssh != null) {
+      _name.text = e!.name;
+      final s = e.ssh!;
+      _host.text = s.host;
+      _port.text = '${s.port}';
+      _username.text = s.username;
+      _authMethod = s.authMethod;
+      _password.text = s.password ?? '';
+      _key.text = s.privateKeyPem ?? '';
+      _passphrase.text = s.passphrase ?? '';
+      _pinnedHostKey = s.pinnedHostKey;
+    }
   }
 
   @override
   void dispose() {
+    _name.dispose();
     _host.dispose();
     _port.dispose();
     _username.dispose();
@@ -56,93 +54,59 @@ class _SshFormState extends ConsumerState<SshForm> {
     super.dispose();
   }
 
-  SshCredentials _buildCreds(String? pin) => SshCredentials(
-        host: _host.text.trim(),
-        port: int.parse(_port.text.trim()),
-        username: _username.text.trim(),
-        authMethod: _authMethod,
-        password: _authMethod == SshAuthMethod.password ? _password.text : null,
-        privateKeyPem: _authMethod == SshAuthMethod.key ? _key.text : null,
-        passphrase: _authMethod == SshAuthMethod.key && _passphrase.text.isNotEmpty ? _passphrase.text : null,
-        pinnedHostKey: pin,
-      );
+  void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  void _connect() {
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
+  ConnectionProfile? _build() {
+    final name = _name.text.trim();
     final host = _host.text.trim();
     final port = int.tryParse(_port.text.trim());
     final user = _username.text.trim();
-    if (host.isEmpty || port == null || port < 1 || port > 65535 || user.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('Enter a valid host, port (1-65535), and username.')));
-      return;
+    if (name.isEmpty || host.isEmpty || port == null || port < 1 || port > 65535 || user.isEmpty) {
+      _snack('Enter a name, host, port (1-65535), and username.');
+      return null;
     }
     if (_authMethod == SshAuthMethod.key && _key.text.trim().isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('A private key is required for key auth.')));
-      return;
+      _snack('A private key is required for key auth.');
+      return null;
     }
     if (_authMethod == SshAuthMethod.password && _password.text.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('A password is required for password auth.')));
-      return;
+      _snack('A password is required for password auth.');
+      return null;
     }
-    _attemptConnect(_pinnedHostKey, messenger, navigator);
+    return ConnectionProfile(
+      id: widget.editing?.id ?? newProfileId(),
+      name: name,
+      kind: ConnectionKind.ssh,
+      ssh: SshCredentials(
+        host: host, port: port, username: user, authMethod: _authMethod,
+        password: _authMethod == SshAuthMethod.password ? _password.text : null,
+        privateKeyPem: _authMethod == SshAuthMethod.key ? _key.text : null,
+        passphrase: _authMethod == SshAuthMethod.key && _passphrase.text.isNotEmpty ? _passphrase.text : null,
+        pinnedHostKey: _pinnedHostKey,
+      ),
+    );
   }
 
-  Future<void> _attemptConnect(String? pin, ScaffoldMessengerState messenger, NavigatorState navigator) async {
-    final creds = _buildCreds(pin);
-    final conn = ref.read(sshConnectionFactoryProvider)(creds);
-    String? presented;
-    var mismatch = false;
-    bool verifier(String fp) {
-      presented = fp;
-      if (verifyHostKey(pin, fp) == HostKeyVerdict.mismatch) {
-        mismatch = true;
-        return false;
-      }
-      return true;
-    }
+  Future<void> _persist(ConnectionProfile p) async {
+    final store = ref.read(profileStoreProvider);
+    widget.editing == null ? await store.add(p) : await store.update(p);
+    ref.invalidate(profilesProvider);
+  }
 
-    setState(() => _connecting = true);
-    try {
-      await conn.connect(verifyHostKey: verifier);
-    } catch (e) {
-      await conn.close(); // reclaim the failed SSH client/socket (esp. on a host-key mismatch)
-      if (!mounted) return;
-      setState(() => _connecting = false);
-      if (mismatch && presented != null) {
-        final trust = await showDialog<bool>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            title: const Text('Host key changed'),
-            content: const Text(
-                'The server host key does not match the pinned key. This could be a man-in-the-middle attack. Trust the new key only if you expected this change.'),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Trust new key')),
-            ],
-          ),
-        );
-        if (trust == true && mounted) {
-          await _attemptConnect(presented, messenger, navigator); // re-pin with the presented key
-        }
-        return;
-      }
-      messenger.showSnackBar(SnackBar(content: Text('Connection failed: $e')));
-      return;
-    }
+  Future<void> _save() async {
+    final p = _build();
+    if (p == null) return;
+    final navigator = Navigator.of(context);
+    await _persist(p);
+    navigator.pop();
+  }
+
+  Future<void> _saveAndConnect() async {
+    final p = _build();
+    if (p == null) return;
+    await _persist(p);
     if (!mounted) return;
-    setState(() => _connecting = false);
-    final newPin = pin ?? presented;
-    // Persist best-effort; never block connecting.
-    try {
-      await ref.read(credentialStoreProvider).saveSsh(_buildCreds(newPin));
-    } catch (_) {}
-    if (!mounted) {
-      await conn.close(); // disposed mid-connect — don't leak the live client
-      return;
-    }
-    ref.read(transportProvider.notifier).state = SshTransport(openDuplex: conn.openChannel);
-    navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
+    await launchConnection(context, ref, p);
   }
 
   @override
@@ -150,6 +114,7 @@ class _SshFormState extends ConsumerState<SshForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
         TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
         TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port'), keyboardType: TextInputType.number),
         TextField(controller: _username, decoration: const InputDecoration(labelText: 'Username')),
@@ -169,9 +134,11 @@ class _SshFormState extends ConsumerState<SshForm> {
           TextField(controller: _passphrase, decoration: const InputDecoration(labelText: 'Passphrase (optional)'), obscureText: true),
         ],
         const SizedBox(height: 16),
-        _connecting
-            ? const Center(child: CircularProgressIndicator())
-            : FilledButton(onPressed: _connect, child: const Text('Connect')),
+        Row(children: [
+          Expanded(child: OutlinedButton(onPressed: _save, child: const Text('Save'))),
+          const SizedBox(width: 8),
+          Expanded(child: FilledButton(onPressed: _saveAndConnect, child: const Text('Save & Connect'))),
+        ]),
       ],
     );
   }
