@@ -25,4 +25,12 @@ void main() {
     await tester.pumpWidget(_host(const MetaChip('bridge')));
     expect(find.text('bridge'), findsOneWidget);
   });
+
+  testWidgets('StatCard shows value, label, sub and icon', (tester) async {
+    await tester.pumpWidget(_host(const StatCard(icon: Icons.layers, value: '12', label: 'Images', sub: 'of 20')));
+    expect(find.text('12'), findsOneWidget);
+    expect(find.text('Images'), findsOneWidget);
+    expect(find.text('of 20'), findsOneWidget);
+    expect(find.byIcon(Icons.layers), findsOneWidget);
+  });
 }
