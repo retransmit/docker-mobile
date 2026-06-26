@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../connect/disconnect.dart';
 import '../state/providers.dart';
 import 'events_screen.dart';
+import 'widgets/resource_widgets.dart';
 
 String _humanSize(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -65,6 +66,28 @@ class SystemScreen extends ConsumerWidget {
                 child: ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: StatCard(icon: Icons.inventory_2, value: '${info.containersRunning}', label: 'Containers', sub: 'of ${info.containers} total')),
+                          const SizedBox(width: 12),
+                          Expanded(child: StatCard(icon: Icons.layers, value: '${info.images}', label: 'Images')),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(child: StatCard(icon: Icons.storage, value: '${df.volumes.count}', label: 'Volumes')),
+                          const SizedBox(width: 12),
+                          Expanded(child: StatCard(icon: Icons.pie_chart, value: _humanSize(df.total), label: 'Disk used')),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     _card('Daemon', [
                       _kv('Version', info.serverVersion),
                       _kv('API', v.apiVersion),
@@ -73,13 +96,6 @@ class SystemScreen extends ConsumerWidget {
                       _kv('CPUs', '${info.ncpu}'),
                       _kv('Memory', _humanSize(info.memTotal)),
                       _kv('Storage driver', info.storageDriver),
-                    ]),
-                    _card('Containers', [
-                      _kv('Total', '${info.containers}'),
-                      _kv('Running', '${info.containersRunning}'),
-                      _kv('Paused', '${info.containersPaused}'),
-                      _kv('Stopped', '${info.containersStopped}'),
-                      _kv('Images', '${info.images}'),
                     ]),
                     _card('Disk usage', [
                       for (final c in [df.images, df.containers, df.volumes, df.buildCache])

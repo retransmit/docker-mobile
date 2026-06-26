@@ -82,3 +82,39 @@ class MetaChip extends StatelessWidget {
     );
   }
 }
+
+/// A dashboard metric tile: tinted icon, large value, label, and optional sub.
+class StatCard extends StatelessWidget {
+  final IconData icon;
+  final String value;
+  final String label;
+  final String? sub;
+  const StatCard({super.key, required this.icon, required this.value, required this.label, this.sub});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: scheme.secondaryContainer, borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, size: 20, color: scheme.onSecondaryContainer),
+            ),
+            const SizedBox(height: 12),
+            Text(value, style: text.headlineSmall?.copyWith(fontWeight: FontWeight.w700)),
+            Text(label, style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
+            if (sub != null) Text(sub!, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+          ],
+        ),
+      ),
+    );
+  }
+}

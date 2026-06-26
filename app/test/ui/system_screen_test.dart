@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/system_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
 class _FakeTransport implements Transport {
   @override
@@ -45,9 +46,12 @@ void main() {
     ));
     await tester.pumpAndSettle();
 
+    expect(find.byType(StatCard), findsNWidgets(4)); // containers/images/volumes/disk grid
+    expect(find.widgetWithText(StatCard, 'Containers'), findsOneWidget);
+    expect(find.widgetWithText(StatCard, 'Images'), findsOneWidget);
+    expect(find.widgetWithText(StatCard, '3'), findsOneWidget); // containersRunning value
     expect(find.textContaining('27.0.3'), findsWidgets); // server version
     expect(find.textContaining('overlay2'), findsWidgets); // storage driver
-    expect(find.textContaining('Images'), findsWidgets); // disk usage category
   });
 
   testWidgets('System prune with both toggles runs the full sequence', (tester) async {
