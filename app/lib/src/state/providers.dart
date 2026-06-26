@@ -9,6 +9,7 @@ import '../api/models/docker_volume.dart';
 import '../api/models/image_detail.dart';
 import '../api/models/system_info.dart';
 import '../storage/credential_store.dart';
+import '../transport/ssh/ssh_connection.dart';
 import '../transport/transport.dart';
 
 /// The active transport, set once the user connects. Null = not connected.
@@ -16,6 +17,10 @@ final transportProvider = StateProvider<Transport?>((ref) => null);
 
 /// The secure credential store (overridden with an in-memory fake in tests).
 final credentialStoreProvider = Provider<CredentialStore>((ref) => SecureCredentialStore());
+
+/// Factory for an SSH connection to a host (overridden with a fake in tests).
+final sshConnectionFactoryProvider =
+    Provider<SshConnection Function(SshCredentials)>((ref) => RealSshConnection.new);
 
 /// The single Docker client, derived from the active transport.
 final dockerClientProvider = Provider<DockerApiClient?>((ref) {

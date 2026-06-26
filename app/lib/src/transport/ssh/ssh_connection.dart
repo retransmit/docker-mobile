@@ -67,3 +67,54 @@ Future<String> sshDaemonVersion(SshCredentials creds, {required HostKeyVerifier 
     await conn.close();
   }
 }
+
+/// A live SSH connection to a Docker host: one shared client, a cheap
+/// `dial-stdio` channel per request.
+abstract class SshConnection {
+  Future<void> connect({required HostKeyVerifier verifyHostKey});
+  Future<Duplex> openChannel();
+  Future<void> close();
+}
+
+String _stripSha256Prefix(String fp) => fp.startsWith('SHA256:') ? fp.substring(7) : fp;
+
+class RealSshConnection implements SshConnection {
+  final SshCredentials creds;
+  SSHClient? _client;
+  RealSshConnection(this.creds);
+
+  @override
+  Future<void> connect({required HostKeyVerifier verifyHostKey}) async {
+    final socket = await SSHSocket.connect(creds.host, creds.port);
+    final client = SSHClient(
+      socket,
+      username: creds.username,
+      onPasswordRequest:
+          creds.authMethod == SshAuthMethod.password ? () => creds.password ?? '' : null,
+      identities: creds.authMethod == SshAuthMethod.key && creds.privateKeyPem != null
+          ? SSHKeyPair.fromPem(creds.privateKeyPem!, creds.passphrase)
+          : null,
+      // dartssh2 hands a precomputed utf8('SHA256:'+base64NoPad(sha256(hostkey)));
+      // stripping the prefix yields exactly fingerprintSha256()'s output.
+      onVerifyHostKey: (type, fingerprint) =>
+          verifyHostKey(_stripSha256Prefix(String.fromCharCodes(fingerprint))),
+    );
+    _client = client;
+    await client.authenticated; // forces handshake + host-key callback + auth
+  }
+
+  @override
+  Future<Duplex> openChannel() async {
+    final client = _client;
+    if (client == null) throw StateError('SSH not connected');
+    final session = await client.execute('docker system dial-stdio');
+    return Duplex(
+      input: session.stdout,
+      add: (bytes) => session.stdin.add(Uint8List.fromList(bytes)),
+      close: () async => session.close(),
+    );
+  }
+
+  @override
+  Future<void> close() async => _client?.close();
+}
