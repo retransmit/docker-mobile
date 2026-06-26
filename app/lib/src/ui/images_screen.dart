@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import 'image_detail_screen.dart';
 import 'pull_sheet.dart';
+import 'widgets/resource_widgets.dart';
 
 class ImagesScreen extends ConsumerWidget {
   const ImagesScreen({super.key});
@@ -39,12 +40,17 @@ class ImagesScreen extends ConsumerWidget {
           itemBuilder: (context, i) {
             final img = list[i];
             final name = _name(img.repoTags, img.id);
-            return ListTile(
-              leading: const Icon(Icons.inventory_2),
-              title: Text(name),
-              subtitle: Text('${(img.size / (1024 * 1024)).toStringAsFixed(1)} MB'),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => ImageDetailScreen(imageId: img.id, title: name))),
+            final shortId = img.id.length > 19 ? img.id.substring(7, 19) : img.id;
+            return Card(
+              child: ListTile(
+                leading: const LeadingAvatar(icon: Icons.layers),
+                title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: MonoText(shortId, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                trailing: MetaChip('${(img.size / (1024 * 1024)).toStringAsFixed(1)} MB'),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => ImageDetailScreen(imageId: img.id, title: name)),
+                ),
+              ),
             );
           },
         ),

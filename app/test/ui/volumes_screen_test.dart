@@ -40,6 +40,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('data'), findsOneWidget);
+    expect(find.text('/mnt/data'), findsOneWidget); // mountpoint mono subtitle
+    expect(find.text('local'), findsOneWidget); // driver chip
 
     await tester.tap(find.byIcon(Icons.cleaning_services));
     await tester.pumpAndSettle();

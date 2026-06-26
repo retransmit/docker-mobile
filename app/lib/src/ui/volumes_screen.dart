@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import 'volume_create_sheet.dart';
 import 'volume_detail_screen.dart';
+import 'widgets/resource_widgets.dart';
 
 class VolumesScreen extends ConsumerWidget {
   const VolumesScreen({super.key});
@@ -31,12 +32,16 @@ class VolumesScreen extends ConsumerWidget {
           itemCount: list.length,
           itemBuilder: (context, i) {
             final v = list[i];
-            return ListTile(
-              leading: const Icon(Icons.storage),
-              title: Text(v.name),
-              subtitle: Text('${v.driver} · ${v.mountpoint}'),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => VolumeDetailScreen(volumeName: v.name))),
+            return Card(
+              child: ListTile(
+                leading: const LeadingAvatar(icon: Icons.storage),
+                title: MonoText(v.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: MonoText(v.mountpoint, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall),
+                trailing: MetaChip(v.driver),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => VolumeDetailScreen(volumeName: v.name)),
+                ),
+              ),
             );
           },
         ),
