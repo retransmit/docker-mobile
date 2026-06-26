@@ -14,19 +14,23 @@ class ThemeSettingsNotifier extends StateNotifier<ThemeSettings> {
 
   Future<void> _load() async => state = await _store.load();
 
+  // Persist best-effort: the live theme already changed, so a write failure
+  // must not surface as an unhandled async error (matches the app's pattern).
+  void _persist() => _store.save(state).catchError((Object _) {});
+
   void setMode(ThemeMode mode) {
     state = state.copyWith(mode: mode);
-    _store.save(state);
+    _persist();
   }
 
   void setDynamic(bool useDynamicColor) {
     state = state.copyWith(useDynamicColor: useDynamicColor);
-    _store.save(state);
+    _persist();
   }
 
   void setSeed(int seed) {
     state = state.copyWith(seed: seed);
-    _store.save(state);
+    _persist();
   }
 }
 
