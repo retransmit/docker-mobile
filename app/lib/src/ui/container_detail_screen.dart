@@ -130,51 +130,58 @@ class _Body extends ConsumerWidget {
         // Environment (collapsed)
         if (detail.env.isNotEmpty) _EnvCard(env: detail.env),
         const SizedBox(height: 8),
-        // Lifecycle actions (restyled in Task 2)
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            if (!s.running)
-              ElevatedButton(onPressed: () => onRun(context, ref, () => client.startContainer(containerId), 'Started'), child: const Text('Start')),
-            if (s.running && !s.paused) ...[
-              ElevatedButton(onPressed: () => onRun(context, ref, () => client.stopContainer(containerId), 'Stopped'), child: const Text('Stop')),
-              ElevatedButton(onPressed: () => onRun(context, ref, () => client.restartContainer(containerId), 'Restarted'), child: const Text('Restart')),
-              ElevatedButton(onPressed: () => onRun(context, ref, () => client.pauseContainer(containerId), 'Paused'), child: const Text('Pause')),
-            ],
-            if (s.paused)
-              ElevatedButton(onPressed: () => onRun(context, ref, () => client.unpauseContainer(containerId), 'Unpaused'), child: const Text('Unpause')),
-            if (s.running)
-              ElevatedButton(
+        // Lifecycle actions (grouped under a titled Actions card)
+        _InfoCard('Actions', [
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (!s.running)
+                FilledButton.tonal(onPressed: () => onRun(context, ref, () => client.startContainer(containerId), 'Started'), child: const Text('Start')),
+              if (s.running && !s.paused) ...[
+                FilledButton.tonal(onPressed: () => onRun(context, ref, () => client.stopContainer(containerId), 'Stopped'), child: const Text('Stop')),
+                FilledButton.tonal(onPressed: () => onRun(context, ref, () => client.restartContainer(containerId), 'Restarted'), child: const Text('Restart')),
+                FilledButton.tonal(onPressed: () => onRun(context, ref, () => client.pauseContainer(containerId), 'Paused'), child: const Text('Pause')),
+              ],
+              if (s.paused)
+                FilledButton.tonal(onPressed: () => onRun(context, ref, () => client.unpauseContainer(containerId), 'Unpaused'), child: const Text('Unpause')),
+              if (s.running)
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: Theme.of(context).colorScheme.error,
+                      foregroundColor: Theme.of(context).colorScheme.onError),
+                  onPressed: () async {
+                    if (await _confirm(context, 'Kill container?', 'Sends SIGKILL immediately.') && context.mounted) {
+                      await onRun(context, ref, () => client.killContainer(containerId), 'Killed');
+                    }
+                  },
+                  child: const Text('Kill'),
+                ),
+              OutlinedButton(
                 onPressed: () async {
-                  if (await _confirm(context, 'Kill container?', 'Sends SIGKILL immediately.') && context.mounted) {
-                    await onRun(context, ref, () => client.killContainer(containerId), 'Killed');
+                  final name = await _renameDialog(context, containerName);
+                  if (name != null && name.isNotEmpty && context.mounted) {
+                    await onRun(context, ref, () => client.renameContainer(containerId, name), 'Renamed');
                   }
                 },
-                child: const Text('Kill'),
+                child: const Text('Rename'),
               ),
-            OutlinedButton(
-              onPressed: () async {
-                final name = await _renameDialog(context, containerName);
-                if (name != null && name.isNotEmpty && context.mounted) {
-                  await onRun(context, ref, () => client.renameContainer(containerId, name), 'Renamed');
-                }
-              },
-              child: const Text('Rename'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.errorContainer),
-              onPressed: () async {
-                final opts = await _removeDialog(context);
-                if (opts != null && context.mounted) {
-                  await onRun(context, ref,
-                      () => client.removeContainer(containerId, force: opts.$1, removeVolumes: opts.$2), 'Removed');
-                }
-              },
-              child: const Text('Remove'),
-            ),
-          ],
-        ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.errorContainer,
+                    foregroundColor: Theme.of(context).colorScheme.onErrorContainer),
+                onPressed: () async {
+                  final opts = await _removeDialog(context);
+                  if (opts != null && context.mounted) {
+                    await onRun(context, ref,
+                        () => client.removeContainer(containerId, force: opts.$1, removeVolumes: opts.$2), 'Removed');
+                  }
+                },
+                child: const Text('Remove'),
+              ),
+            ],
+          ),
+        ]),
       ],
     );
   }
