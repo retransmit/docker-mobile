@@ -90,6 +90,12 @@ Future<void> _launchSsh(BuildContext context, WidgetRef ref, ConnectionProfile p
     return;
   }
 
+  // The originating widget (and its ref) may have been disposed during the
+  // handshake; don't read a dead ref — and don't leak the live SSH client.
+  if (!context.mounted) {
+    await conn.close();
+    return;
+  }
   final newPin = pin ?? presented;
   if (newPin != ssh.pinnedHostKey) {
     await ref.read(profileStoreProvider).update(profile.copyWith(
@@ -98,6 +104,10 @@ Future<void> _launchSsh(BuildContext context, WidgetRef ref, ConnectionProfile p
             password: ssh.password, privateKeyPem: ssh.privateKeyPem, passphrase: ssh.passphrase, pinnedHostKey: newPin,
           ),
         ));
+    if (!context.mounted) {
+      await conn.close();
+      return;
+    }
     ref.invalidate(profilesProvider);
   }
   ref.read(transportProvider.notifier).state = SshTransport(openDuplex: conn.openChannel);
