@@ -8,7 +8,10 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import 'duplex_exec_channel.dart';
 import 'transport.dart';
+
+export 'duplex_exec_channel.dart' show SocketExecChannel;
 
 /// Direct mutual-TLS transport to a Docker daemon (no agent, no bearer token).
 class TlsTransport implements Transport {
@@ -93,38 +96,6 @@ class TlsTransport implements Transport {
       throw UnsupportedError('exec requires a hijack opener (use ConnectionConfig to build a live TlsTransport)');
     }
     return opener(execId, cols, rows);
-  }
-}
-
-/// Wraps a raw duplex (a hijacked socket in production, in-memory in tests).
-class SocketExecChannel implements ExecChannel {
-  final Stream<List<int>> _input;
-  final void Function(List<int>) _onSend;
-  final Future<void> Function() _onClose;
-  bool _closed = false;
-
-  SocketExecChannel({
-    required Stream<List<int>> input,
-    required void Function(List<int>) onSend,
-    required Future<void> Function() onClose,
-  })  : _input = input,
-        _onSend = onSend,
-        _onClose = onClose;
-
-  @override
-  Stream<List<int>> get output => _input;
-
-  @override
-  void send(List<int> data) {
-    if (_closed) return;
-    _onSend(data);
-  }
-
-  @override
-  Future<void> close() async {
-    if (_closed) return;
-    _closed = true;
-    await _onClose();
   }
 }
 
