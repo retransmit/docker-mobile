@@ -6,6 +6,7 @@ import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 import 'package:docker_mobile/src/ui/connection_screen.dart';
 import 'package:docker_mobile/src/ui/profiles_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
 Widget _wrap(ProfileStore store) => ProviderScope(
       overrides: [profileStoreProvider.overrideWithValue(store)],
@@ -28,6 +29,10 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('prod'), findsOneWidget);
     expect(find.textContaining('srv'), findsOneWidget);
+    // New card-row structure: kind as a chip, host as monospace.
+    expect(find.byType(MetaChip), findsOneWidget);
+    expect(find.text('ssh'), findsOneWidget);
+    expect(find.byType(MonoText), findsOneWidget);
   });
 
   testWidgets('+ opens the editor', (tester) async {

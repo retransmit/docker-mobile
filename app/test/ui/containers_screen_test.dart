@@ -7,6 +7,7 @@ import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/api/models/docker_container.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/containers_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
 void main() {
   testWidgets('renders container names from the provider', (tester) async {
@@ -27,6 +28,11 @@ void main() {
     expect(find.text('/web'), findsOneWidget);
     expect(find.text('/db'), findsOneWidget);
     expect(find.textContaining('nginx'), findsOneWidget);
+    // New card-row structure: image as monospace, state as a status pill.
+    expect(find.byType(MonoText), findsNWidgets(2));
+    expect(find.byType(StatusPill), findsNWidgets(2));
+    expect(find.text('running'), findsOneWidget);
+    expect(find.text('exited'), findsOneWidget);
   });
 
   testWidgets('renders an error message when loading fails', (tester) async {
