@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
 import 'connect/agent_form.dart';
+import 'connect/ssh_form.dart';
 import 'connect/tls_form.dart';
 
-enum _TransportType { agent, tls }
+enum _TransportType { agent, tls, ssh }
 
 class ConnectionScreen extends StatefulWidget {
   const ConnectionScreen({super.key});
@@ -26,6 +27,7 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
               segments: const [
                 ButtonSegment(value: _TransportType.agent, label: Text('Agent'), icon: Icon(Icons.dns)),
                 ButtonSegment(value: _TransportType.tls, label: Text('TCP+TLS'), icon: Icon(Icons.lock)),
+                ButtonSegment(value: _TransportType.ssh, label: Text('SSH'), icon: Icon(Icons.terminal)),
               ],
               selected: {_type},
               onSelectionChanged: (s) => setState(() => _type = s.first),
@@ -33,7 +35,11 @@ class _ConnectionScreenState extends State<ConnectionScreen> {
             const SizedBox(height: 16),
             Expanded(
               child: SingleChildScrollView(
-                child: _type == _TransportType.agent ? const AgentForm() : const TlsForm(),
+                child: switch (_type) {
+                  _TransportType.agent => const AgentForm(),
+                  _TransportType.tls => const TlsForm(),
+                  _TransportType.ssh => const SshForm(),
+                },
               ),
             ),
           ],
