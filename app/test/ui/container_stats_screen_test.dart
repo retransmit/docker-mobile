@@ -67,5 +67,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.textContaining('Network'), findsWidgets);
     expect(find.textContaining('Block'), findsWidgets);
+    // dual-metric tiles: directional labels render as their own Text widgets
+    expect(find.text('RX'), findsOneWidget);
+    expect(find.text('TX'), findsOneWidget);
+    expect(find.text('Read'), findsOneWidget);
+    expect(find.text('Write'), findsOneWidget);
+    // byte values via MonoText (netRx 1024, netTx 2048, blockRead 4096, blockWrite 8192)
+    expect(find.text('1.0 KB'), findsOneWidget);
+    expect(find.text('2.0 KB'), findsOneWidget);
+    expect(find.text('4.0 KB'), findsOneWidget);
+    expect(find.text('8.0 KB'), findsOneWidget);
   });
 }
