@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:fl_chart/fl_chart.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_stats_screen.dart';
@@ -52,6 +53,18 @@ void main() {
     expect(find.textContaining('40.0'), findsWidgets); // CPU %
     expect(find.textContaining('CPU'), findsWidgets);
     expect(find.textContaining('Memory'), findsWidgets);
+    // CPU value header (percentage) + a chart render
+    expect(find.textContaining('%'), findsWidgets);
+    expect(find.byType(LineChart), findsNWidgets(2)); // CPU + Memory
+    // CPU big value header is its own (percentage) Text
+    expect(find.text('40.0 %'), findsOneWidget);
+    // memory now splits: percent value header + (used / limit) detail
+    expect(find.text('9.3 %'), findsOneWidget);
+    expect(find.text('95.4 MB / 1.00 GB'), findsOneWidget);
+    expect(find.textContaining('/'), findsWidgets);
+    // taller charts push the I/O cards below the fold; scroll them into view
+    await tester.scrollUntilVisible(find.textContaining('Block'), 300);
+    await tester.pumpAndSettle();
     expect(find.textContaining('Network'), findsWidgets);
     expect(find.textContaining('Block'), findsWidgets);
   });
