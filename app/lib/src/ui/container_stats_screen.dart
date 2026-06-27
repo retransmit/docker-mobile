@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/stats_notifier.dart';
+import 'widgets/resource_widgets.dart';
 
 /// CPU% exceeds 100 on multi-core hosts (formula × online_cpus), so the CPU
 /// chart auto-scales to the next 100 above the window's peak. Memory% is 0–100.
@@ -54,9 +55,15 @@ class ContainerStatsScreen extends ConsumerWidget {
           100,
         ),
         const SizedBox(height: 12),
-        _numberCard('Network', 'RX ${_humanBytes(latest.netRx)}   ·   TX ${_humanBytes(latest.netTx)}'),
+        _metricCard(context, 'Network', [
+          ('RX', Icons.arrow_downward, _humanBytes(latest.netRx)),
+          ('TX', Icons.arrow_upward, _humanBytes(latest.netTx)),
+        ]),
         const SizedBox(height: 12),
-        _numberCard('Block I/O', 'Read ${_humanBytes(latest.blockRead)}   ·   Write ${_humanBytes(latest.blockWrite)}'),
+        _metricCard(context, 'Block I/O', [
+          ('Read', Icons.arrow_downward, _humanBytes(latest.blockRead)),
+          ('Write', Icons.arrow_upward, _humanBytes(latest.blockWrite)),
+        ]),
       ],
     );
   }
@@ -119,14 +126,40 @@ class ContainerStatsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _numberCard(String title, String value) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(children: [
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-            const Spacer(),
-            Text(value),
-          ]),
+  Widget _metricCard(BuildContext context, String title, List<(String, IconData, String)> items) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                for (final (label, icon, value) in items)
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+                        const SizedBox(width: 6),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(label, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+                            MonoText(value, style: text.bodyMedium),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 }
