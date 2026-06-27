@@ -39,7 +39,16 @@ class ProfilesScreen extends ConsumerWidget {
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
         data: (list) => list.isEmpty
-            ? const Center(child: Text('No saved connections — tap + to add one.'))
+            ? EmptyState(
+                icon: Icons.dns,
+                title: 'No connections',
+                message: 'Add a Docker host to get started.',
+                action: FilledButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConnectionScreen())),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Add connection'),
+                ),
+              )
             : ListView(
                 children: [
                   for (final p in list)

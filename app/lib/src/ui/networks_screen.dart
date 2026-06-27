@@ -28,7 +28,9 @@ class NetworksScreen extends ConsumerWidget {
       body: networks.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => ListView.builder(
+        data: (list) => list.isEmpty
+            ? const EmptyState(icon: Icons.hub, title: 'No networks')
+            : ListView.builder(
           itemCount: list.length,
           itemBuilder: (context, i) {
             final n = list[i];

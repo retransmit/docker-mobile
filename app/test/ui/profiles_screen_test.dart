@@ -18,7 +18,8 @@ void main() {
     final store = InMemoryProfileStore();
     await tester.pumpWidget(_wrap(store));
     await tester.pumpAndSettle();
-    expect(find.textContaining('No saved connections'), findsOneWidget);
+    expect(find.text('No connections'), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Add connection'), findsOneWidget);
 
     await store.add(const ConnectionProfile(id: '1', name: 'prod', kind: ConnectionKind.ssh,
         ssh: SshCredentials(host: 'srv', port: 22, username: 'u', authMethod: SshAuthMethod.password, password: 'p')));
@@ -38,7 +39,7 @@ void main() {
   testWidgets('+ opens the editor', (tester) async {
     await tester.pumpWidget(_wrap(InMemoryProfileStore()));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
     await tester.pumpAndSettle();
     expect(find.byType(ConnectionScreen), findsOneWidget);
   });
