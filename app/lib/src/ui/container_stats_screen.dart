@@ -32,22 +32,24 @@ class ContainerStatsScreen extends ConsumerWidget {
     final s = ref.watch(statsProvider(containerId));
     return Scaffold(
       appBar: AppBar(title: Text('Stats · $containerName')),
-      body: _body(s),
+      body: _body(context, s),
     );
   }
 
-  Widget _body(StatsState s) {
+  Widget _body(BuildContext context, StatsState s) {
     if (s.status == StatsStatus.error) return Center(child: Text('Error: ${s.error}'));
     final latest = s.latest;
     if (latest == null) return const Center(child: Text('Waiting for stats…'));
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _chartCard('CPU', '${latest.cpuPercent.toStringAsFixed(1)} %', s.cpuHistory, _cpuMaxY(s.cpuHistory)),
+        _chartCard(context, 'CPU', '${latest.cpuPercent.toStringAsFixed(1)} %', null, s.cpuHistory, _cpuMaxY(s.cpuHistory)),
         const SizedBox(height: 12),
         _chartCard(
+          context,
           'Memory',
-          '${_humanBytes(latest.memoryUsed)} / ${_humanBytes(latest.memoryLimit)}  (${latest.memoryPercent.toStringAsFixed(1)} %)',
+          '${latest.memoryPercent.toStringAsFixed(1)} %',
+          '${_humanBytes(latest.memoryUsed)} / ${_humanBytes(latest.memoryLimit)}',
           s.memHistory,
           100,
         ),
@@ -59,40 +61,63 @@ class ContainerStatsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _chartCard(String title, String value, List<double> history, double maxY) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(children: [
-                Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                const Spacer(),
-                Text(value),
-              ]),
-              const SizedBox(height: 8),
-              SizedBox(
-                height: 80,
-                child: LineChart(LineChartData(
-                  minY: 0,
-                  maxY: maxY,
-                  titlesData: const FlTitlesData(show: false),
-                  gridData: const FlGridData(show: false),
-                  borderData: FlBorderData(show: false),
-                  lineBarsData: [
-                    LineChartBarData(
-                      spots: [for (var i = 0; i < history.length; i++) FlSpot(i.toDouble(), history[i])],
-                      isCurved: false,
-                      barWidth: 2,
-                      dotData: const FlDotData(show: false),
+  Widget _chartCard(BuildContext context, String title, String value, String? detail, List<double> history, double maxY) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(value, style: text.headlineSmall?.copyWith(fontWeight: FontWeight.w700, color: scheme.primary)),
+                if (detail != null) ...[
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(detail, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant))),
+                ],
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 110,
+              child: LineChart(LineChartData(
+                minY: 0,
+                maxY: maxY,
+                titlesData: const FlTitlesData(show: false),
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                lineTouchData: const LineTouchData(enabled: false),
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: [for (var i = 0; i < history.length; i++) FlSpot(i.toDouble(), history[i])],
+                    isCurved: true,
+                    preventCurveOverShooting: true,
+                    barWidth: 3,
+                    color: scheme.primary,
+                    dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [scheme.primary.withValues(alpha: 0.30), scheme.primary.withValues(alpha: 0.0)],
+                      ),
                     ),
-                  ],
-                )),
-              ),
-            ],
-          ),
+                  ),
+                ],
+              )),
+            ),
+          ],
         ),
-      );
+      ),
+    );
+  }
 
   Widget _numberCard(String title, String value) => Card(
         child: Padding(
