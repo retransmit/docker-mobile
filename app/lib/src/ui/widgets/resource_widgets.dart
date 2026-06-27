@@ -118,3 +118,44 @@ class StatCard extends StatelessWidget {
     );
   }
 }
+
+/// A centered empty-state placeholder: tinted icon + title + optional message + optional action.
+class EmptyState extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String? message;
+  final Widget? action;
+  const EmptyState({super.key, required this.icon, required this.title, this.message, this.action});
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(color: scheme.secondaryContainer, shape: BoxShape.circle),
+              child: Icon(icon, size: 36, color: scheme.onSecondaryContainer),
+            ),
+            const SizedBox(height: 16),
+            Text(title, style: text.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            if (message != null) ...[
+              const SizedBox(height: 6),
+              Text(message!, textAlign: TextAlign.center, style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant)),
+            ],
+            if (action != null) ...[
+              const SizedBox(height: 20),
+              action!,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
