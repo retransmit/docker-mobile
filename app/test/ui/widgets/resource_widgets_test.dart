@@ -33,4 +33,23 @@ void main() {
     expect(find.text('of 20'), findsOneWidget);
     expect(find.byIcon(Icons.layers), findsOneWidget);
   });
+
+  testWidgets('EmptyState shows icon + title + message + action', (tester) async {
+    await tester.pumpWidget(_host(EmptyState(
+      icon: Icons.dns,
+      title: 'No connections',
+      message: 'Add a Docker host to get started.',
+      action: FilledButton(onPressed: () {}, child: const Text('Add connection')),
+    )));
+    expect(find.text('No connections'), findsOneWidget);
+    expect(find.text('Add a Docker host to get started.'), findsOneWidget);
+    expect(find.byIcon(Icons.dns), findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Add connection'), findsOneWidget);
+  });
+
+  testWidgets('EmptyState omits message and action when null', (tester) async {
+    await tester.pumpWidget(_host(const EmptyState(icon: Icons.hub, title: 'No networks')));
+    expect(find.text('No networks'), findsOneWidget);
+    expect(find.byType(FilledButton), findsNothing);
+  });
 }
