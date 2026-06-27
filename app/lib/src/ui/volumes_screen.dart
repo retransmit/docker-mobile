@@ -28,7 +28,9 @@ class VolumesScreen extends ConsumerWidget {
       body: volumes.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => ListView.builder(
+        data: (list) => list.isEmpty
+            ? const EmptyState(icon: Icons.storage, title: 'No volumes')
+            : ListView.builder(
           itemCount: list.length,
           itemBuilder: (context, i) {
             final v = list[i];

@@ -33,7 +33,9 @@ class ContainersScreen extends ConsumerWidget {
       body: containers.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => ListView.builder(
+        data: (list) => list.isEmpty
+            ? const EmptyState(icon: Icons.inventory_2, title: 'No containers', message: 'This daemon has no containers yet.')
+            : ListView.builder(
           padding: const EdgeInsets.symmetric(vertical: 8),
           itemCount: list.length,
           itemBuilder: (context, i) {

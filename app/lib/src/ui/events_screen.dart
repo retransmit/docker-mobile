@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/events_notifier.dart';
+import 'widgets/resource_widgets.dart';
 
 class EventsScreen extends ConsumerWidget {
   const EventsScreen({super.key});
@@ -55,7 +56,11 @@ class EventsScreen extends ConsumerWidget {
             child: state.status == EventsStatus.error
                 ? Center(child: Text('Error: ${state.error}'))
                 : state.visibleEvents.isEmpty
-                    ? const Center(child: Text('No events yet.'))
+                    ? const EmptyState(
+                        icon: Icons.bolt,
+                        title: 'No events yet',
+                        message: 'Events appear here as activity happens on the daemon.',
+                      )
                     : ListView.builder(
                         itemCount: state.visibleEvents.length,
                         itemBuilder: (context, i) {

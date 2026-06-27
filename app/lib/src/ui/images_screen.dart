@@ -35,7 +35,9 @@ class ImagesScreen extends ConsumerWidget {
       body: images.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => ListView.builder(
+        data: (list) => list.isEmpty
+            ? const EmptyState(icon: Icons.layers, title: 'No images', message: 'Pull an image to get started.')
+            : ListView.builder(
           itemCount: list.length,
           itemBuilder: (context, i) {
             final img = list[i];
