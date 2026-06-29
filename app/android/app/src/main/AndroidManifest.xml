@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for all network transports (Agent HTTP, TCP+TLS, SSH). Flutter auto-adds
+         this to the debug/profile manifests but NOT to the release (main) manifest, so it
+         must be declared here or release builds fail every socket connect (errno=1). -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="docker_mobile"
         android:name="${applicationName}"
