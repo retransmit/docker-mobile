@@ -34,6 +34,7 @@ class EventsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(eventsProvider);
     final notifier = ref.read(eventsProvider.notifier);
+    final visible = state.visibleEvents;
     return Scaffold(
       appBar: AppBar(title: const Text('Events')),
       body: Column(
@@ -55,16 +56,16 @@ class EventsScreen extends ConsumerWidget {
           Expanded(
             child: state.status == EventsStatus.error
                 ? Center(child: Text('Error: ${state.error}'))
-                : state.visibleEvents.isEmpty
+                : visible.isEmpty
                     ? const EmptyState(
                         icon: Icons.bolt,
                         title: 'No events yet',
                         message: 'Events appear here as activity happens on the daemon.',
                       )
                     : ListView.builder(
-                        itemCount: state.visibleEvents.length,
+                        itemCount: visible.length,
                         itemBuilder: (context, i) {
-                          final e = state.visibleEvents[i];
+                          final e = visible[i];
                           return ListTile(
                             dense: true,
                             leading: Icon(_icon(e.type)),
