@@ -91,34 +91,39 @@ class ContainerStatsScreen extends ConsumerWidget {
               ],
             ),
             const SizedBox(height: 12),
-            SizedBox(
-              height: 110,
-              child: LineChart(LineChartData(
-                minY: 0,
-                maxY: maxY,
-                titlesData: const FlTitlesData(show: false),
-                gridData: const FlGridData(show: false),
-                borderData: FlBorderData(show: false),
-                lineTouchData: const LineTouchData(enabled: false),
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: [for (var i = 0; i < history.length; i++) FlSpot(i.toDouble(), history[i])],
-                    isCurved: true,
-                    preventCurveOverShooting: true,
-                    barWidth: 3,
-                    color: scheme.primary,
-                    dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [scheme.primary.withValues(alpha: 0.30), scheme.primary.withValues(alpha: 0.0)],
+            RepaintBoundary(
+              child: SizedBox(
+                height: 110,
+                child: LineChart(
+                  duration: Duration.zero,
+                  LineChartData(
+                    minY: 0,
+                    maxY: maxY,
+                    titlesData: const FlTitlesData(show: false),
+                    gridData: const FlGridData(show: false),
+                    borderData: FlBorderData(show: false),
+                    lineTouchData: const LineTouchData(enabled: false),
+                    lineBarsData: [
+                      LineChartBarData(
+                        spots: [for (var i = 0; i < history.length; i++) FlSpot(i.toDouble(), history[i])],
+                        isCurved: true,
+                        preventCurveOverShooting: true,
+                        barWidth: 3,
+                        color: scheme.primary,
+                        dotData: const FlDotData(show: false),
+                        belowBarData: BarAreaData(
+                          show: true,
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [scheme.primary.withValues(alpha: 0.30), scheme.primary.withValues(alpha: 0.0)],
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
-                ],
-              )),
+                ),
+              ),
             ),
           ],
         ),
