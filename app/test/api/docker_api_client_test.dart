@@ -65,4 +65,73 @@ void main() {
       throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
     );
   });
+
+  test('listImages decodes the array (off main isolate)', () async {
+    final t = _FakeTransport(http.Response(
+      '[{"Id":"sha256:abc","RepoTags":["nginx:latest"],"Size":1234,"Created":99}]',
+      200,
+    ));
+    final client = DockerApiClient(t);
+
+    final images = await client.listImages();
+
+    expect(t.lastPath, '/images/json');
+    expect(images, hasLength(1));
+    expect(images.first.id, 'sha256:abc');
+    expect(images.first.repoTags, ['nginx:latest']);
+    expect(images.first.size, 1234);
+  });
+
+  test('listImages decodes a large body on a background isolate', () async {
+    // Build a >64KB array so the client takes the Isolate.run decode path.
+    final entries = List.generate(
+      2000,
+      (i) => '{"Id":"sha256:img$i","RepoTags":["repo$i:latest"],"Size":$i,"Created":0}',
+    );
+    final t = _FakeTransport(http.Response('[${entries.join(',')}]', 200));
+    final client = DockerApiClient(t);
+
+    final images = await client.listImages();
+
+    expect(images, hasLength(2000));
+    expect(images.first.id, 'sha256:img0');
+    expect(images.last.id, 'sha256:img1999');
+    expect(images.last.size, 1999);
+  });
+
+  test('listImages throws DockerApiException on non-200', () async {
+    final t = _FakeTransport(http.Response('boom', 500));
+    final client = DockerApiClient(t);
+    expect(
+      () => client.listImages(),
+      throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
+    );
+  });
+
+  test('getDiskUsage decodes the object (off main isolate)', () async {
+    final t = _FakeTransport(http.Response(
+      '{"Images":[{"Size":100}],"Containers":[{"SizeRw":20}],'
+      '"Volumes":[{"UsageData":{"Size":5}}],"BuildCache":[{"Size":3}]}',
+      200,
+    ));
+    final client = DockerApiClient(t);
+
+    final df = await client.getDiskUsage();
+
+    expect(t.lastPath, '/system/df');
+    expect(df.images.size, 100);
+    expect(df.containers.size, 20);
+    expect(df.volumes.size, 5);
+    expect(df.buildCache.size, 3);
+    expect(df.total, 128);
+  });
+
+  test('getDiskUsage throws DockerApiException on non-200', () async {
+    final t = _FakeTransport(http.Response('boom', 500));
+    final client = DockerApiClient(t);
+    expect(
+      () => client.getDiskUsage(),
+      throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
+    );
+  });
 }

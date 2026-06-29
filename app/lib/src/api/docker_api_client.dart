@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:http/http.dart' as http;
 
@@ -31,6 +32,17 @@ class DockerApiException implements Exception {
 class DockerApiClient {
   final Transport transport;
   const DockerApiClient(this.transport);
+
+  /// JSON bodies at/above this size are decoded on a background isolate so a
+  /// large `/images/json` or `/system/df` payload (hundreds of KB on a busy
+  /// host) doesn't jank the UI thread. Smaller bodies decode inline — the
+  /// isolate spawn overhead isn't worth it for them.
+  static const int _isolateDecodeThreshold = 64 * 1024;
+
+  static Future<dynamic> _decodeJson(String body) =>
+      body.length >= _isolateDecodeThreshold
+          ? Isolate.run(() => jsonDecode(body))
+          : Future<dynamic>.sync(() => jsonDecode(body));
 
   Future<List<DockerContainer>> listContainers({bool all = true}) async {
     final resp = await transport.get('/containers/json', query: {'all': all.toString()});
@@ -156,7 +168,8 @@ class DockerApiClient {
   Future<List<DockerImage>> listImages() async {
     final resp = await transport.get('/images/json');
     if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
-    return (jsonDecode(resp.body) as List).map((e) => DockerImage.fromJson(e as Map<String, dynamic>)).toList();
+    final decoded = await _decodeJson(resp.body) as List;
+    return decoded.map((e) => DockerImage.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<ImageDetail> inspectImage(String id) async {
@@ -315,7 +328,8 @@ class DockerApiClient {
   Future<DiskUsage> getDiskUsage() async {
     final resp = await transport.get('/system/df');
     if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
-    return DiskUsage.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
+    final decoded = await _decodeJson(resp.body) as Map<String, dynamic>;
+    return DiskUsage.fromJson(decoded);
   }
 
   Future<void> pruneContainers() async =>
