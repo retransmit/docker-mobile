@@ -67,6 +67,7 @@ class LogsNotifier extends StateNotifier<LogsState> {
   final bool _tty;
   StreamSubscription<LogChunk>? _sub;
   final Map<LogStream, String> _partial = {};
+  final List<LogLine> _buf = <LogLine>[];
 
   LogsNotifier(this._client, this._id, this._tty) : super(const LogsState()) {
     _start();
@@ -75,7 +76,8 @@ class LogsNotifier extends StateNotifier<LogsState> {
   void _start() {
     _sub?.cancel();
     _partial.clear();
-    state = state.copyWith(lines: [], status: LogsStatus.streaming, clearError: true);
+    _buf.clear();
+    state = state.copyWith(lines: _buf, status: LogsStatus.streaming, clearError: true);
     _sub = _client
         .streamContainerLogs(
           _id,
@@ -93,11 +95,11 @@ class LogsNotifier extends StateNotifier<LogsState> {
     final parts = combined.split('\n');
     _partial[chunk.source] = parts.removeLast(); // trailing partial line
     if (parts.isEmpty) return;
-    final next = [...state.lines, ...parts.map((p) => _toLine(chunk.source, p))];
-    final capped = next.length > kLogBufferCap
-        ? next.sublist(next.length - kLogBufferCap)
-        : next;
-    state = state.copyWith(lines: capped);
+    _buf.addAll(parts.map((p) => _toLine(chunk.source, p)));
+    if (_buf.length > kLogBufferCap) {
+      _buf.removeRange(0, _buf.length - kLogBufferCap);
+    }
+    state = state.copyWith(lines: _buf);
   }
 
   LogLine _toLine(LogStream source, String raw) {
@@ -166,7 +168,7 @@ final containerInspectProvider =
 });
 
 final logsProvider =
-    StateNotifierProvider.family<LogsNotifier, LogsState, ({String id, bool tty})>(
+    StateNotifierProvider.autoDispose.family<LogsNotifier, LogsState, ({String id, bool tty})>(
   (ref, key) {
     final client = ref.watch(dockerClientProvider);
     if (client == null) throw StateError('Not connected');

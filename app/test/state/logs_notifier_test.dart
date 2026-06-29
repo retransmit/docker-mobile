@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/api/stdcopy.dart';
 import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/state/logs_notifier.dart';
+import 'package:docker_mobile/src/state/providers.dart';
 
 /// Returns a fresh single-subscription stream of [chunks] on every call,
 /// so re-subscribing (follow/tail/timestamps changes) works.
@@ -151,6 +153,32 @@ void main() {
     expect(n.state.lines.map((l) => l.text).toList(), ['before']); // preserved
 
     n.dispose();
+    await controller.close();
+  });
+
+  test('logsProvider is autoDispose: notifier is disposed when the last listener leaves', () async {
+    final controller = StreamController<List<int>>();
+    final container = ProviderContainer(overrides: [
+      dockerClientProvider.overrideWith((ref) => DockerApiClient(_ControllerTransport(controller))),
+    ]);
+    addTearDown(container.dispose);
+
+    const key = (id: 'a', tty: false);
+    final sub = container.listen(logsProvider(key), (_, _) {});
+    final notifier = container.read(logsProvider(key).notifier);
+
+    controller.add(frame(1, utf8.encode('one\n')));
+    await pumpEventQueue();
+    expect(notifier.state.lines.single.text, 'one');
+    expect(notifier.mounted, isTrue); // live while listened to
+
+    // Removing the only listener must auto-dispose the notifier. Its dispose()
+    // cancels the live log-stream subscription, so no leaked follow stream
+    // survives the LogsScreen being popped.
+    sub.close();
+    await pumpEventQueue();
+    expect(notifier.mounted, isFalse);
+
     await controller.close();
   });
 
