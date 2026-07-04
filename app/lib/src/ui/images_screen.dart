@@ -5,6 +5,7 @@ import '../state/providers.dart';
 import 'image_detail_screen.dart';
 import 'pull_sheet.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 
 class ImagesScreen extends ConsumerWidget {
   const ImagesScreen({super.key});
@@ -32,15 +33,32 @@ class ImagesScreen extends ConsumerWidget {
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(imagesProvider)),
         ],
       ),
-      body: images.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => list.isEmpty
-            ? const EmptyState(icon: Icons.layers, title: 'No images', message: 'Pull an image to get started.')
-            : ListView.builder(
-          itemCount: list.length,
-          itemBuilder: (context, i) {
-            final img = list[i];
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: images.when(
+          loading: () => const SkeletonList(key: ValueKey('loading')),
+          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          data: (list) => RefreshIndicator(
+            key: const ValueKey('data'),
+            onRefresh: () async {
+              ref.invalidate(imagesProvider);
+              await ref.read(imagesProvider.future);
+            },
+            child: list.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const [
+                      SizedBox(
+                        height: 480,
+                        child: EmptyState(icon: Icons.layers, title: 'No images', message: 'Pull an image to get started.'),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: list.length,
+                    itemBuilder: (context, i) {
+                      final img = list[i];
             final name = _name(img.repoTags, img.id);
             final shortId = img.id.length > 19 ? img.id.substring(7, 19) : img.id;
             return Card(
@@ -54,7 +72,9 @@ class ImagesScreen extends ConsumerWidget {
                 ),
               ),
             );
-          },
+                    },
+                  ),
+          ),
         ),
       ),
     );

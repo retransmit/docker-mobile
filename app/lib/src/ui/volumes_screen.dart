@@ -5,6 +5,7 @@ import '../state/providers.dart';
 import 'volume_create_sheet.dart';
 import 'volume_detail_screen.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 
 class VolumesScreen extends ConsumerWidget {
   const VolumesScreen({super.key});
@@ -25,15 +26,32 @@ class VolumesScreen extends ConsumerWidget {
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(volumesProvider)),
         ],
       ),
-      body: volumes.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => list.isEmpty
-            ? const EmptyState(icon: Icons.storage, title: 'No volumes')
-            : ListView.builder(
-          itemCount: list.length,
-          itemBuilder: (context, i) {
-            final v = list[i];
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: volumes.when(
+          loading: () => const SkeletonList(key: ValueKey('loading')),
+          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          data: (list) => RefreshIndicator(
+            key: const ValueKey('data'),
+            onRefresh: () async {
+              ref.invalidate(volumesProvider);
+              await ref.read(volumesProvider.future);
+            },
+            child: list.isEmpty
+                ? ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: const [
+                      SizedBox(
+                        height: 480,
+                        child: EmptyState(icon: Icons.storage, title: 'No volumes'),
+                      ),
+                    ],
+                  )
+                : ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: list.length,
+                    itemBuilder: (context, i) {
+                      final v = list[i];
             return Card(
               child: ListTile(
                 leading: const LeadingAvatar(icon: Icons.storage),
@@ -45,7 +63,9 @@ class VolumesScreen extends ConsumerWidget {
                 ),
               ),
             );
-          },
+                    },
+                  ),
+          ),
         ),
       ),
     );

@@ -8,6 +8,7 @@ import 'package:docker_mobile/src/api/models/docker_container.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/containers_screen.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
+import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
 void main() {
   testWidgets('renders container names from the provider', (tester) async {
@@ -52,7 +53,7 @@ void main() {
     expect(find.byType(ListTile), findsNothing);
   });
 
-  testWidgets('shows a spinner while loading', (tester) async {
+  testWidgets('shows a skeleton while loading', (tester) async {
     final completer = Completer<List<DockerContainer>>();
     await tester.pumpWidget(
       ProviderScope(
@@ -62,9 +63,11 @@ void main() {
         child: const MaterialApp(home: ContainersScreen()),
       ),
     );
-    await tester.pump(); // do not settle: stay in the loading state
+    // The shimmer animates forever; pump a fixed duration rather than settling.
+    await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(SkeletonList), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
 
     completer.complete(const []);
     await tester.pumpAndSettle();

@@ -5,6 +5,7 @@ import '../connect/disconnect.dart';
 import '../state/providers.dart';
 import 'events_screen.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 
 String _humanSize(int bytes) {
   if (bytes < 1024) return '$bytes B';
@@ -53,19 +54,28 @@ class SystemScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: dash.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (d) {
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: dash.when(
+          loading: () => const SkeletonCards(key: ValueKey('loading')),
+          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          data: (d) {
           final info = d.info;
           final v = d.version;
           final df = d.df;
           return Column(
+            key: const ValueKey('data'),
             children: [
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
+                child: RefreshIndicator(
+                  onRefresh: () async {
+                    ref.invalidate(systemDashboardProvider);
+                    await ref.read(systemDashboardProvider.future);
+                  },
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.all(16),
+                    children: [
                     IntrinsicHeight(
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -102,7 +112,8 @@ class SystemScreen extends ConsumerWidget {
                         _kv2(context, '${c.name} (${c.count})', _humanSize(c.size), mono: true),
                       _kv2(context, 'Total', _humanSize(df.total), mono: true),
                     ]),
-                  ],
+                    ],
+                  ),
                 ),
               ),
               Padding(
@@ -125,6 +136,7 @@ class SystemScreen extends ConsumerWidget {
             ],
           );
         },
+        ),
       ),
     );
   }
