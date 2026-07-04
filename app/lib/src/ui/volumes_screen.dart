@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
@@ -88,6 +89,7 @@ class VolumesScreen extends ConsumerWidget {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     try {
+      HapticFeedback.mediumImpact();
       await client.pruneVolumes();
       ref.invalidate(volumesProvider);
       messenger.showSnackBar(const SnackBar(content: Text('Pruned')));

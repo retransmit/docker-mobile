@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:animations/animations.dart';
 
 /// Brightness-aware status colors for container state (running/paused/stopped)
 /// and destructive accents. Exposed as a ThemeExtension so widgets read it via
@@ -43,6 +44,10 @@ StatusColors statusColorsFor(Brightness b) => b == Brightness.dark
 ThemeData buildAppTheme(ColorScheme scheme) {
   final base = ThemeData(colorScheme: scheme, useMaterial3: true);
   return base.copyWith(
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {
+      TargetPlatform.android: FadeThroughPageTransitionsBuilder(),
+      TargetPlatform.iOS: FadeThroughPageTransitionsBuilder(),
+    }),
     scaffoldBackgroundColor: scheme.surface,
     textTheme: base.textTheme.copyWith(
       headlineSmall: base.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),

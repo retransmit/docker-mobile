@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../connect/disconnect.dart';
@@ -148,6 +149,7 @@ class SystemScreen extends ConsumerWidget {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     try {
+      HapticFeedback.mediumImpact();
       await client.systemPrune(allImages: opts.$1, includeVolumes: opts.$2);
       ref.invalidate(systemDashboardProvider);
       ref.invalidate(containersProvider);

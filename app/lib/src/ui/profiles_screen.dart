@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../connect/connection_launcher.dart';
@@ -68,7 +69,7 @@ class ProfilesScreen extends ConsumerWidget {
                             Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
                           ],
                         ),
-                        onTap: () => launchConnection(context, ref, p),
+                        onTap: () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
                         trailing: PopupMenuButton<String>(
                           onSelected: (v) async {
                             if (v == 'edit') {

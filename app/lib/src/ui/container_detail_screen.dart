@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models/container_detail.dart';
@@ -159,6 +160,7 @@ class _Body extends ConsumerWidget {
                       foregroundColor: Theme.of(context).colorScheme.onError),
                   onPressed: () async {
                     if (await _confirm(context, 'Kill container?', 'Sends SIGKILL immediately.') && context.mounted) {
+                      HapticFeedback.mediumImpact();
                       await onRun(context, ref, () => client.killContainer(containerId), 'Killed');
                     }
                   },
@@ -180,6 +182,7 @@ class _Body extends ConsumerWidget {
                 onPressed: () async {
                   final opts = await _removeDialog(context);
                   if (opts != null && context.mounted) {
+                    HapticFeedback.mediumImpact();
                     await onRun(context, ref,
                         () => client.removeContainer(containerId, force: opts.$1, removeVolumes: opts.$2), 'Removed');
                   }

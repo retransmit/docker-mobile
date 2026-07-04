@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'containers_screen.dart';
@@ -26,7 +27,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) { HapticFeedback.selectionClick(); setState(() => _index = i); },
         destinations: const [
           NavigationDestination(icon: Icon(Icons.inventory), label: 'Containers'),
           NavigationDestination(icon: Icon(Icons.layers), label: 'Images'),

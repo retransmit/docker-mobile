@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:animations/animations.dart';
 import 'package:docker_mobile/src/theme/app_theme.dart';
 
 void main() {
@@ -11,6 +12,12 @@ void main() {
 
     final dark = buildAppTheme(ColorScheme.fromSeed(seedColor: const Color(0xFF2496ED), brightness: Brightness.dark));
     expect(dark.colorScheme.brightness, Brightness.dark);
+  });
+
+  test('theme uses fade-through page transitions', () {
+    final t = buildAppTheme(ColorScheme.fromSeed(seedColor: const Color(0xFF2496ED)));
+    final builder = t.pageTransitionsTheme.builders[TargetPlatform.android];
+    expect(builder, isA<FadeThroughPageTransitionsBuilder>());
   });
 
   test('status colors differ between light and dark', () {
