@@ -34,15 +34,18 @@ class ContainerStatsScreen extends ConsumerWidget {
     final s = ref.watch(statsProvider(containerId));
     return Scaffold(
       appBar: AppBar(title: Text('Stats · $containerName')),
-      body: _body(context, s),
+      body: AnimatedSwitcher(duration: const Duration(milliseconds: 300), child: _body(context, s)),
     );
   }
 
   Widget _body(BuildContext context, StatsState s) {
-    if (s.status == StatsStatus.error) return Center(child: Text('Error: ${s.error}'));
+    if (s.status == StatsStatus.error) {
+      return Center(key: const ValueKey('error'), child: Text('Error: ${s.error}'));
+    }
     final latest = s.latest;
-    if (latest == null) return const SkeletonCards();
+    if (latest == null) return const SkeletonCards(key: ValueKey('loading'));
     return ListView(
+      key: const ValueKey('data'),
       padding: const EdgeInsets.all(16),
       children: [
         _chartCard(context, 'CPU', '${latest.cpuPercent.toStringAsFixed(1)} %', null, s.cpuHistory, _cpuMaxY(s.cpuHistory)),
