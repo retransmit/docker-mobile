@@ -4,7 +4,7 @@
          must be declared here or release builds fail every socket connect (errno=1). -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="docker_mobile"
+        android:label="Docker Mobile"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
