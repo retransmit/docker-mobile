@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/stats_notifier.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 
 /// CPU% exceeds 100 on multi-core hosts (formula × online_cpus), so the CPU
 /// chart auto-scales to the next 100 above the window's peak. Memory% is 0-100.
@@ -40,7 +41,7 @@ class ContainerStatsScreen extends ConsumerWidget {
   Widget _body(BuildContext context, StatsState s) {
     if (s.status == StatsStatus.error) return Center(child: Text('Error: ${s.error}'));
     final latest = s.latest;
-    if (latest == null) return const Center(child: Text('Waiting for stats…'));
+    if (latest == null) return const SkeletonCards();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [

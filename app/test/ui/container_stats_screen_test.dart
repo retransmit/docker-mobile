@@ -7,6 +7,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_stats_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
 class _FakeTransport implements Transport {
   final List<int>? statsBytes;
@@ -41,10 +42,10 @@ Widget _wrap(Transport t) => ProviderScope(
     );
 
 void main() {
-  testWidgets('shows a waiting state before the first sample', (tester) async {
+  testWidgets('shows a skeleton before the first sample', (tester) async {
     await tester.pumpWidget(_wrap(_FakeTransport()));
-    await tester.pump();
-    expect(find.textContaining('Waiting'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(find.byType(SkeletonCards), findsOneWidget);
   });
 
   testWidgets('renders CPU%, memory and I/O from a sample', (tester) async {

@@ -5,6 +5,7 @@ import '../api/models/container_detail.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 import 'logs_screen.dart';
 import 'exec_screen.dart';
 import 'container_stats_screen.dart';
@@ -36,10 +37,16 @@ class ContainerDetailScreen extends ConsumerWidget {
           IconButton(icon: const Icon(Icons.refresh), onPressed: () => ref.invalidate(containerDetailProvider(containerId))),
         ],
       ),
-      body: detail.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (c) => _Body(detail: c, containerId: containerId, containerName: containerName, onRun: _run),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: detail.when(
+          loading: () => const SkeletonCards(key: ValueKey('loading')),
+          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          data: (c) => KeyedSubtree(
+            key: const ValueKey('data'),
+            child: _Body(detail: c, containerId: containerId, containerName: containerName, onRun: _run),
+          ),
+        ),
       ),
     );
   }

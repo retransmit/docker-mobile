@@ -7,6 +7,7 @@ import '../storage/profile_store.dart';
 import 'connection_screen.dart';
 import 'settings_screen.dart';
 import 'widgets/resource_widgets.dart';
+import 'widgets/skeletons.dart';
 
 class ProfilesScreen extends ConsumerWidget {
   const ProfilesScreen({super.key});
@@ -35,11 +36,15 @@ class ProfilesScreen extends ConsumerWidget {
         onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConnectionScreen())),
         child: const Icon(Icons.add),
       ),
-      body: profiles.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (list) => list.isEmpty
-            ? EmptyState(
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: profiles.when(
+          loading: () => const SkeletonList(key: ValueKey('loading')),
+          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          data: (list) => KeyedSubtree(
+            key: const ValueKey('data'),
+            child: list.isEmpty
+              ? EmptyState(
                 icon: Icons.dns,
                 title: 'No connections',
                 message: 'Add a Docker host to get started.',
@@ -82,6 +87,8 @@ class ProfilesScreen extends ConsumerWidget {
                     ),
                 ],
               ),
+          ),
+        ),
       ),
     );
   }
