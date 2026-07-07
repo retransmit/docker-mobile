@@ -8,6 +8,7 @@ import '../api/models/container_create_config.dart';
 import '../api/models/pull_event.dart';
 import '../state/providers.dart';
 import 'pull_sheet.dart' show parseImageRef;
+import 'widgets/app_text_field.dart';
 import 'widgets/key_value_editor.dart';
 import 'widgets/port_mapping_editor.dart';
 
@@ -156,9 +157,9 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          TextField(controller: _image, decoration: const InputDecoration(labelText: 'Image (e.g. nginx:latest)')),
-          TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name (optional)')),
-          TextField(controller: _command, decoration: const InputDecoration(labelText: 'Command (optional, space-separated)')),
+          AppTextField(controller: _image, label: 'Image (e.g. nginx:latest)', icon: Icons.layers),
+          AppTextField(controller: _name, label: 'Name (optional)', icon: Icons.label),
+          AppTextField(controller: _command, label: 'Command (optional, space-separated)', icon: Icons.terminal),
           const SizedBox(height: 8),
           DropdownButtonFormField<String?>(
             initialValue: _network,
@@ -185,9 +186,9 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
             onChanged: (v) => setState(() => _restart = v),
           ),
           Row(children: [
-            Expanded(child: TextField(controller: _memory, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Memory (MB)'))),
+            Expanded(child: AppTextField(controller: _memory, label: 'Memory (MB)', icon: Icons.memory, keyboardType: TextInputType.number)),
             const SizedBox(width: 8),
-            Expanded(child: TextField(controller: _cpus, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'CPUs'))),
+            Expanded(child: AppTextField(controller: _cpus, label: 'CPUs', icon: Icons.speed, keyboardType: TextInputType.number)),
           ]),
           const SizedBox(height: 12),
           KeyValueEditor(title: 'Environment', onChanged: (m) => _env = m),

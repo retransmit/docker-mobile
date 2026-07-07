@@ -5,6 +5,7 @@ import '../../connect/connection_launcher.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
+import '../widgets/app_text_field.dart';
 
 class TlsForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -103,12 +104,12 @@ class _TlsFormState extends ConsumerState<TlsForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
-        TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
-        TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port'), keyboardType: TextInputType.number),
-        TextField(controller: _cert, decoration: const InputDecoration(labelText: 'Client certificate (PEM)'), maxLines: 4),
-        TextField(controller: _key, decoration: const InputDecoration(labelText: 'Client key (PEM)'), maxLines: 4),
-        TextField(controller: _ca, decoration: const InputDecoration(labelText: 'CA certificate (PEM, optional)'), maxLines: 4),
+        AppTextField(controller: _name, label: 'Name', icon: Icons.label),
+        AppTextField(controller: _host, label: 'Host / IP', icon: Icons.dns),
+        AppTextField(controller: _port, label: 'Port', icon: Icons.numbers, keyboardType: TextInputType.number),
+        AppTextField(controller: _cert, label: 'Client certificate (PEM)', icon: Icons.description, maxLines: 4),
+        AppTextField(controller: _key, label: 'Client key (PEM)', icon: Icons.description, maxLines: 4),
+        AppTextField(controller: _ca, label: 'CA certificate (PEM, optional)', icon: Icons.description, maxLines: 4),
         SwitchListTile(title: const Text('Allow insecure (skip server verification)'), value: _insecure, onChanged: (v) => setState(() => _insecure = v)),
         const SizedBox(height: 16),
         Row(children: [

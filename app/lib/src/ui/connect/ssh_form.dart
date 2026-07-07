@@ -5,6 +5,7 @@ import '../../connect/connection_launcher.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
+import '../widgets/app_text_field.dart';
 
 class SshForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -114,10 +115,10 @@ class _SshFormState extends ConsumerState<SshForm> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
-        TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
-        TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port'), keyboardType: TextInputType.number),
-        TextField(controller: _username, decoration: const InputDecoration(labelText: 'Username')),
+        AppTextField(controller: _name, label: 'Name', icon: Icons.label),
+        AppTextField(controller: _host, label: 'Host / IP', icon: Icons.dns),
+        AppTextField(controller: _port, label: 'Port', icon: Icons.numbers, keyboardType: TextInputType.number),
+        AppTextField(controller: _username, label: 'Username', icon: Icons.person),
         const SizedBox(height: 8),
         SegmentedButton<SshAuthMethod>(
           segments: const [
@@ -128,10 +129,10 @@ class _SshFormState extends ConsumerState<SshForm> {
           onSelectionChanged: (s) => setState(() => _authMethod = s.first),
         ),
         if (_authMethod == SshAuthMethod.password)
-          TextField(controller: _password, decoration: const InputDecoration(labelText: 'Password'), obscureText: true)
+          AppTextField(controller: _password, label: 'Password', icon: Icons.lock, obscure: true, last: true, onSubmit: _saveAndConnect)
         else ...[
-          TextField(controller: _key, decoration: const InputDecoration(labelText: 'Private key (PEM)'), maxLines: 4),
-          TextField(controller: _passphrase, decoration: const InputDecoration(labelText: 'Passphrase (optional)'), obscureText: true),
+          AppTextField(controller: _key, label: 'Private key (PEM)', icon: Icons.vpn_key, maxLines: 4),
+          AppTextField(controller: _passphrase, label: 'Passphrase (optional)', icon: Icons.password, obscure: true, last: true, onSubmit: _saveAndConnect),
         ],
         const SizedBox(height: 16),
         Row(children: [

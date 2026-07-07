@@ -5,6 +5,7 @@ import '../../connect/connection_launcher.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
+import '../widgets/app_text_field.dart';
 
 class AgentForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -86,10 +87,10 @@ class _AgentFormState extends ConsumerState<AgentForm> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        TextField(controller: _name, decoration: const InputDecoration(labelText: 'Name')),
-        TextField(controller: _host, decoration: const InputDecoration(labelText: 'Host / IP')),
-        TextField(controller: _port, decoration: const InputDecoration(labelText: 'Port'), keyboardType: TextInputType.number),
-        TextField(controller: _token, decoration: const InputDecoration(labelText: 'Token'), obscureText: true),
+        AppTextField(controller: _name, label: 'Name', icon: Icons.label),
+        AppTextField(controller: _host, label: 'Host / IP', icon: Icons.dns),
+        AppTextField(controller: _port, label: 'Port', icon: Icons.numbers, keyboardType: TextInputType.number),
+        AppTextField(controller: _token, label: 'Token', icon: Icons.key, obscure: true, last: true, onSubmit: _saveAndConnect),
         SwitchListTile(title: const Text('Use TLS (https)'), value: _useTls, onChanged: (v) => setState(() => _useTls = v)),
         const SizedBox(height: 16),
         Row(children: [
