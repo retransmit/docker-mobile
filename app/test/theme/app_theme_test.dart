@@ -20,6 +20,14 @@ void main() {
     expect(builder, isA<FadeThroughPageTransitionsBuilder>());
   });
 
+  test('input theme is filled with focus-aware prefix icon color', () {
+    final t = buildAppTheme(ColorScheme.fromSeed(seedColor: const Color(0xFF2496ED)));
+    final dec = t.inputDecorationTheme;
+    expect(dec.filled, isTrue);
+    final prefix = dec.prefixIconColor! as WidgetStateColor;
+    expect(prefix.resolve({WidgetState.focused}), isNot(prefix.resolve(<WidgetState>{})));
+  });
+
   test('status colors differ between light and dark', () {
     expect(statusColorsFor(Brightness.light).running, isNot(statusColorsFor(Brightness.dark).running));
     expect(statusColorsFor(Brightness.light).stopped, isNot(statusColorsFor(Brightness.dark).stopped));

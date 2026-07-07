@@ -84,7 +84,17 @@ ThemeData buildAppTheme(ColorScheme scheme) {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: scheme.surfaceContainerHighest,
-      isDense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      floatingLabelBehavior: FloatingLabelBehavior.auto,
+      prefixIconColor: WidgetStateColor.resolveWith(
+        (states) => states.contains(WidgetState.focused) ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+      suffixIconColor: WidgetStateColor.resolveWith(
+        (states) => states.contains(WidgetState.focused) ? scheme.primary : scheme.onSurfaceVariant,
+      ),
+      labelStyle: WidgetStateTextStyle.resolveWith(
+        (states) => TextStyle(color: states.contains(WidgetState.focused) ? scheme.primary : scheme.onSurfaceVariant),
+      ),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
       enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
       focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: scheme.primary, width: 2)),
