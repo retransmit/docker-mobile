@@ -34,6 +34,15 @@ class _AppTextFieldState extends State<AppTextField> {
   late bool _hidden = widget.obscure;
 
   @override
+  void didUpdateWidget(AppTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // If this State is reused for a field with a different `obscure` (e.g. a
+    // keyless if/else swaps a secret in for a plain field), re-derive the
+    // hidden state so a secret never inherits a prior field's revealed state.
+    if (oldWidget.obscure != widget.obscure) _hidden = widget.obscure;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final canObscure = widget.obscure && widget.maxLines == 1;
     final multiline = widget.maxLines > 1;

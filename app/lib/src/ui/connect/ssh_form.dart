@@ -129,10 +129,10 @@ class _SshFormState extends ConsumerState<SshForm> {
           onSelectionChanged: (s) => setState(() => _authMethod = s.first),
         ),
         if (_authMethod == SshAuthMethod.password)
-          AppTextField(controller: _password, label: 'Password', icon: Icons.lock, obscure: true, last: true, onSubmit: _saveAndConnect)
+          AppTextField(key: const ValueKey('ssh-password'), controller: _password, label: 'Password', icon: Icons.lock, obscure: true, last: true, onSubmit: _saveAndConnect)
         else ...[
-          AppTextField(controller: _key, label: 'Private key (PEM)', icon: Icons.vpn_key, maxLines: 4),
-          AppTextField(controller: _passphrase, label: 'Passphrase (optional)', icon: Icons.password, obscure: true, last: true, onSubmit: _saveAndConnect),
+          AppTextField(key: const ValueKey('ssh-key'), controller: _key, label: 'Private key (PEM)', icon: Icons.vpn_key, maxLines: 4),
+          AppTextField(key: const ValueKey('ssh-passphrase'), controller: _passphrase, label: 'Passphrase (optional)', icon: Icons.password, obscure: true, last: true, onSubmit: _saveAndConnect),
         ],
         const SizedBox(height: 16),
         Row(children: [
