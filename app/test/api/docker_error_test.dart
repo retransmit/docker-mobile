@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
+import 'package:http/http.dart' show ClientException;
+import 'package:web_socket_channel/web_socket_channel.dart' show WebSocketChannelException;
 
 void main() {
   group('fromResponse', () {
@@ -78,6 +80,40 @@ void main() {
       expect(identical(DockerError.fromException(original), original), isTrue);
       expect(identical(DockerError.wrap(original), original), isTrue);
       expect(DockerError.wrap(TimeoutException('t')).kind, DockerErrorKind.timeout);
+    });
+
+    test('http ClientException and WebSocketChannelException are network and retryable', () {
+      final c = DockerError.fromException(ClientException('Connection closed while receiving data'));
+      expect(c.kind, DockerErrorKind.network);
+      expect(c.retryable, isTrue);
+      expect(c.message, contains('Connection closed'));
+      final w = DockerError.fromException(WebSocketChannelException('connect failed'));
+      expect(w.kind, DockerErrorKind.network);
+      expect(w.retryable, isTrue);
+    });
+
+    test('tls handshake message includes the OS detail when present', () {
+      final withDetail = DockerError.fromException(const HandshakeException(
+          'Handshake error in client', OSError('CERTIFICATE_VERIFY_FAILED: self signed certificate', 1)));
+      expect(withDetail.message, contains('CERTIFICATE_VERIFY_FAILED'));
+      final withoutDetail = DockerError.fromException(const HandshakeException('Handshake error in client'));
+      expect(withoutDetail.message, contains('Handshake error in client'));
+    });
+
+    test('every mapped message is clipped', () {
+      expect(DockerError.fromException(SocketException('x' * 500)).message.length, lessThanOrEqualTo(203));
+      final long = 'x' * 500;
+      for (final e in <Object>[
+        HandshakeException('h', OSError(long)),
+        HandshakeException(long),
+        TlsException(long),
+        WebSocketException(long),
+        HttpException(long),
+        ClientException(long),
+        WebSocketChannelException(long),
+      ]) {
+        expect(DockerError.fromException(e).message.length, lessThanOrEqualTo(203), reason: '${e.runtimeType}');
+      }
     });
   });
 

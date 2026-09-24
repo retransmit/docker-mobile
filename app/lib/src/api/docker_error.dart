@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:http/http.dart' show ClientException;
+import 'package:web_socket_channel/web_socket_channel.dart' show WebSocketChannelException;
+
 enum DockerErrorKind { network, timeout, unauthorized, notFound, conflict, badRequest, server, cancelled, unknown }
 
 /// The single error type thrown by the API client and every transport.
@@ -42,12 +45,24 @@ class DockerError implements Exception {
     if (e is SocketException) {
       final detail = e.osError?.message ?? e.message;
       return DockerError(DockerErrorKind.network,
-          detail.trim().isEmpty ? 'Cannot reach the daemon' : 'Cannot reach the daemon: ${detail.trim()}', cause: e);
+          _clip(detail.trim().isEmpty ? 'Cannot reach the daemon' : 'Cannot reach the daemon: ${detail.trim()}'),
+          cause: e);
     }
-    if (e is HandshakeException) return DockerError(DockerErrorKind.network, 'TLS handshake failed: ${e.message}', cause: e);
-    if (e is TlsException) return DockerError(DockerErrorKind.network, 'TLS error: ${e.message}', cause: e);
-    if (e is WebSocketException) return DockerError(DockerErrorKind.network, 'WebSocket error: ${e.message}', cause: e);
-    if (e is HttpException) return DockerError(DockerErrorKind.network, e.message, cause: e);
+    if (e is HandshakeException) {
+      final detail = e.osError?.message;
+      return DockerError(DockerErrorKind.network,
+          _clip('TLS handshake failed: ${(detail == null || detail.trim().isEmpty) ? e.message : detail.trim()}'),
+          cause: e);
+    }
+    if (e is TlsException) return DockerError(DockerErrorKind.network, _clip('TLS error: ${e.message}'), cause: e);
+    if (e is WebSocketException) {
+      return DockerError(DockerErrorKind.network, _clip('WebSocket error: ${e.message}'), cause: e);
+    }
+    if (e is HttpException) return DockerError(DockerErrorKind.network, _clip(e.message), cause: e);
+    if (e is ClientException) return DockerError(DockerErrorKind.network, _clip(e.message), cause: e);
+    if (e is WebSocketChannelException) {
+      return DockerError(DockerErrorKind.network, _clip(e.message ?? 'WebSocket connection failed'), cause: e);
+    }
     if (e is IOException) return DockerError(DockerErrorKind.network, _clip(e.toString()), cause: e);
     return DockerError(DockerErrorKind.unknown, _clip(e.toString()), cause: e);
   }
