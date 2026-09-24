@@ -138,6 +138,52 @@ void main() {
     });
   });
 
+  test('a stream cancelled while its channel opens closes the channel without sending the request', () {
+    fakeAsync((async) {
+      final opening = Completer<Duplex>();
+      final t = SshTransport(openDuplex: () => opening.future);
+      final sub = t.stream('/x').listen((_) {});
+      async.flushMicrotasks();
+      sub.cancel();
+      var requestSent = false;
+      var closed = false;
+      opening.complete(Duplex(
+          input: StreamController<List<int>>().stream,
+          add: (_) => requestSent = true,
+          close: () async => closed = true));
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 3));
+      expect(closed, isTrue, reason: 'nobody will read the late channel, so it must not leak');
+      expect(requestSent, isFalse);
+    });
+  });
+
+  test('a stream cancelled while waiting for headers closes the channel quietly', () {
+    fakeAsync((async) {
+      var closed = false;
+      final input = StreamController<List<int>>();
+      final t = SshTransport(
+        openDuplex: () async => Duplex(
+          input: input.stream,
+          add: (_) {},
+          close: () async {
+            closed = true;
+            // Like a real channel, closing it ends its output, so the pending
+            // head read fails; that failure must not surface as an uncaught error.
+            unawaited(input.close());
+          },
+        ),
+        headerTimeout: const Duration(seconds: 5),
+      );
+      final sub = t.stream('/x').listen((_) {});
+      async.flushMicrotasks();
+      sub.cancel();
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 6)); // past the header budget as well
+      expect(closed, isTrue);
+    });
+  });
+
   test('execAttach times out when the channel never opens', () {
     fakeAsync((async) {
       final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));

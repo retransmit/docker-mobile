@@ -147,9 +147,19 @@ class RealSshConnection implements SshConnection {
     } catch (e, st) {
       // A bad key or passphrase throws here (SSHKeyPair.fromPem): release the
       // already-connected socket rather than leak it. Text that is not PEM at
-      // all fails as a FormatException, which is the same unreadable key.
+      // all fails as a FormatException, which is the same unreadable key; a
+      // key type dartssh2 cannot parse (a PKCS#8 `BEGIN PRIVATE KEY`, say)
+      // fails as an UnsupportedError.
       socket.destroy();
-      Error.throwWithStackTrace(e is FormatException ? _unreadableKey(e) : mapSshError(e), st);
+      Error.throwWithStackTrace(
+        switch (e) {
+          FormatException() => _unreadableKey(e),
+          UnsupportedError() => DockerError(DockerErrorKind.unauthorized,
+              'SSH private key type is not supported - use an OpenSSH or PEM RSA/EC key', cause: e),
+          _ => mapSshError(e),
+        },
+        st,
+      );
     }
     _client = client;
     try {

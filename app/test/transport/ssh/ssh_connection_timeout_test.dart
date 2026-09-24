@@ -87,4 +87,25 @@ void main() {
             .having((e) => e.cause, 'cause', isA<FormatException>())));
     expect(socket.closed, isTrue);
   });
+
+  test('a key type dartssh2 cannot parse is reported as unsupported and releases the socket', () async {
+    final socket = _FakeSocket();
+    // A PKCS#8 `BEGIN PRIVATE KEY` file: valid PEM that SSHKeyPair.fromPem
+    // rejects with an UnsupportedError.
+    final keyCreds = SshCredentials(
+        host: 'h',
+        port: 22,
+        username: 'u',
+        authMethod: SshAuthMethod.key,
+        privateKeyPem: File('test/fixtures/client-key.pem').readAsStringSync());
+    final conn = RealSshConnection(keyCreds, connector: (_, _, _) async => socket);
+    await expectLater(
+        conn.connect(verifyHostKey: (_) => true),
+        throwsA(isA<DockerError>()
+            .having((e) => e.kind, 'kind', DockerErrorKind.unauthorized)
+            .having((e) => e.message, 'message',
+                'SSH private key type is not supported - use an OpenSSH or PEM RSA/EC key')
+            .having((e) => e.cause, 'cause', isA<UnsupportedError>())));
+    expect(socket.closed, isTrue);
+  });
 }
