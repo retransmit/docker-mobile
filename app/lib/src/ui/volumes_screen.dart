@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import 'volume_create_sheet.dart';
 import 'volume_detail_screen.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 
@@ -31,7 +32,16 @@ class VolumesScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: volumes.when(
           loading: () => const SkeletonList(key: ValueKey('loading')),
-          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          error: (e, _) => RefreshIndicator(
+            key: const ValueKey('error'),
+            onRefresh: () async {
+              try {
+                ref.invalidate(volumesProvider);
+                await ref.read(volumesProvider.future);
+              } catch (_) {}
+            },
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(volumesProvider)),
+          ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {

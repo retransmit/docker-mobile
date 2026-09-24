@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'widgets/error_view.dart';
 
 class NetworkDetailScreen extends ConsumerWidget {
   final String networkId;
@@ -15,7 +16,7 @@ class NetworkDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(title)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(networkDetailProvider(networkId))),
         data: (d) {
           final client = ref.read(dockerClientProvider);
           return ListView(

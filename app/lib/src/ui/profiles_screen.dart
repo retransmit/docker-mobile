@@ -7,6 +7,7 @@ import '../state/providers.dart';
 import '../storage/profile_store.dart';
 import 'connection_screen.dart';
 import 'settings_screen.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 
@@ -41,7 +42,7 @@ class ProfilesScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: profiles.when(
           loading: () => const SkeletonList(key: ValueKey('loading')),
-          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(profilesProvider)),
           data: (list) => KeyedSubtree(
             key: const ValueKey('data'),
             child: list.isEmpty

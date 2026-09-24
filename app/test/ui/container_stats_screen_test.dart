@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_stats_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
 import '../support/fake_transport.dart';
@@ -60,5 +62,15 @@ void main() {
     expect(find.text('2.0 KB'), findsOneWidget);
     expect(find.text('4.0 KB'), findsOneWidget);
     expect(find.text('8.0 KB'), findsOneWidget);
+  });
+
+  testWidgets('a failing stats stream renders an ErrorView with Retry', (tester) async {
+    await tester.pumpWidget(_wrap(FakeTransport()
+      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(500, '{"message":"boom"}')))));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('boom'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
   });
 }

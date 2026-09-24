@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_detail_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
 import '../support/fake_transport.dart';
@@ -115,5 +117,25 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(t.posts.map((c) => c.path), contains('/containers/a/rename'));
+  });
+
+  testWidgets('renders an ErrorView with Retry when loading fails', (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          containerDetailProvider.overrideWith(
+            (ref, id) async => throw DockerError.fromResponse(500, '{"message":"boom"}'),
+          ),
+        ],
+        child: const MaterialApp(home: ContainerDetailScreen(containerId: 'a', containerName: 'web')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('Daemon error'), findsOneWidget);
+    expect(find.text('boom'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(find.byType(StatusPill), findsNothing);
   });
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/stats_notifier.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 
@@ -34,13 +35,17 @@ class ContainerStatsScreen extends ConsumerWidget {
     final s = ref.watch(statsProvider(containerId));
     return Scaffold(
       appBar: AppBar(title: Text('Stats · $containerName')),
-      body: AnimatedSwitcher(duration: const Duration(milliseconds: 300), child: _body(context, s)),
+      body: AnimatedSwitcher(duration: const Duration(milliseconds: 300), child: _body(context, ref, s)),
     );
   }
 
-  Widget _body(BuildContext context, StatsState s) {
+  Widget _body(BuildContext context, WidgetRef ref, StatsState s) {
     if (s.status == StatsStatus.error) {
-      return Center(key: const ValueKey('error'), child: Text('Error: ${s.error}'));
+      return ErrorView(
+        key: const ValueKey('error'),
+        error: s.error ?? 'Stats stream failed',
+        onRetry: () => ref.invalidate(statsProvider(containerId)),
+      );
     }
     final latest = s.latest;
     if (latest == null) return const SkeletonCards(key: ValueKey('loading'));

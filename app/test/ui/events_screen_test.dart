@@ -3,10 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/events_screen.dart';
 import 'package:docker_mobile/src/ui/system_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 
 import '../support/fake_transport.dart';
 
@@ -45,5 +47,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(EventsScreen), findsOneWidget);
     expect(find.textContaining('No events'), findsOneWidget);
+  });
+
+  testWidgets('a failing event stream renders an ErrorView with Retry', (tester) async {
+    final t = FakeTransport()
+      ..onStream('/events', (_) => Stream.error(DockerError.fromResponse(500, '{"message":"boom"}')));
+    await tester.pumpWidget(_wrap(t, const EventsScreen()));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('boom'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
   });
 }
