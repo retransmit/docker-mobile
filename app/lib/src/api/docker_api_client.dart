@@ -133,6 +133,7 @@ class DockerApiClient {
     bool timestamps = false,
     bool stdout = true,
     bool stderr = true,
+    String? since,
   }) {
     final query = {
       'follow': follow.toString(),
@@ -140,6 +141,7 @@ class DockerApiClient {
       'stderr': stderr.toString(),
       'tail': tail?.toString() ?? 'all',
       'timestamps': timestamps.toString(),
+      'since': ?since,
     };
     final raw = _stream('/containers/$id/logs', query: query);
     return tty ? decodeRawLog(raw) : decodeStdcopy(raw);
@@ -439,8 +441,8 @@ class DockerApiClient {
     }
   }
 
-  Stream<DockerEvent> streamEvents() async* {
-    final raw = _stream('/events');
+  Stream<DockerEvent> streamEvents({String? since}) async* {
+    final raw = _stream('/events', query: since == null ? null : {'since': since});
     final buffer = <int>[];
     await for (final chunk in raw) {
       buffer.addAll(chunk);

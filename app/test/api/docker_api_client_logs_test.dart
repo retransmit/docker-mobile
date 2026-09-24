@@ -58,4 +58,13 @@ void main() {
     expect(chunks.single.source, LogStream.stdout);
     expect(utf8.decode(chunks.single.bytes), 'hello');
   });
+
+  test('since is passed through when given and omitted otherwise', () async {
+    final t = FakeTransport()..onStream(RegExp('.*'), (_) => const Stream.empty());
+    final client = DockerApiClient(t);
+    await client.streamContainerLogs('c1', tty: true, since: '1700000000.000000123').toList();
+    expect(t.lastQuery!['since'], '1700000000.000000123');
+    await client.streamContainerLogs('c1', tty: true).toList();
+    expect(t.lastQuery!.containsKey('since'), isFalse);
+  });
 }

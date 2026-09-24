@@ -27,4 +27,13 @@ void main() {
     expect(events.length, 1);
     expect(events.single.type, 'volume');
   });
+
+  test('events since is passed through when given', () async {
+    final t = FakeTransport()..onStream(RegExp('.*'), (_) => const Stream.empty());
+    final client = DockerApiClient(t);
+    await client.streamEvents(since: '1700000000.5').toList();
+    expect(t.lastQuery, {'since': '1700000000.5'});
+    await client.streamEvents().toList();
+    expect(t.lastQuery, isNull);
+  });
 }

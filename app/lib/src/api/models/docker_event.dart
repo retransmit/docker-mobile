@@ -2,9 +2,18 @@ class DockerEvent {
   final String type;
   final String action;
   final String target;
+  final String actorId;
   final DateTime? time;
+  final int? timeNano;
 
-  const DockerEvent({required this.type, required this.action, required this.target, this.time});
+  const DockerEvent({
+    required this.type,
+    required this.action,
+    required this.target,
+    this.actorId = '',
+    this.time,
+    this.timeNano,
+  });
 
   factory DockerEvent.fromJson(Map<String, dynamic> json) {
     final actor = (json['Actor'] as Map?) ?? const {};
@@ -21,7 +30,9 @@ class DockerEvent {
       type: json['Type'] as String? ?? '',
       action: json['Action'] as String? ?? '',
       target: target,
+      actorId: id,
       time: time,
+      timeNano: timeNano,
     );
   }
 }
