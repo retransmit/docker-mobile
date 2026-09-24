@@ -22,8 +22,8 @@ class SshTransport implements Transport {
   final Future<Duplex> Function() _openDuplex;
   final Future<void> Function()? _onClose;
 
-  /// Budget for the daemon's answer: a buffered call's whole response, or the
-  /// headers of a stream or exec upgrade. Stream bodies never time out.
+  /// Budget for the response headers of a stream or an exec upgrade; stream
+  /// bodies never time out. Buffered calls are bounded by the API client.
   final Duration headerTimeout;
   SshTransport({
     required Future<Duplex> Function() openDuplex,
@@ -49,7 +49,7 @@ class SshTransport implements Transport {
       }
       writeHttpRequest(conn.add,
           method: method, path: _pathWithQuery(path, query), headers: h.isEmpty ? null : h, body: bodyBytes);
-      final r = await readBufferedResponse(conn.input).timeout(headerTimeout);
+      final r = await readBufferedResponse(conn.input);
       return http.Response.bytes(r.body, r.statusCode, headers: r.headers);
     } catch (e, st) {
       Error.throwWithStackTrace(DockerError.wrap(e), st);
@@ -145,7 +145,12 @@ class SshTransport implements Transport {
 
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
-    final conn = await _openDuplex();
+    final Duplex conn;
+    try {
+      conn = await _openDuplex();
+    } catch (e, st) {
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
+    }
     try {
       writeHttpRequest(
         conn.add,

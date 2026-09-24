@@ -82,16 +82,17 @@ void main() {
     expect(utf8.decode(await ch.output.first), 'shell-output');
   });
 
-  test('buffered call times out when the daemon never answers', () {
+  test('buffered calls are not bounded by the transport', () {
     fakeAsync((async) {
       var closed = false;
       final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async => closed = true);
       final t = SshTransport(openDuplex: () async => conn, headerTimeout: const Duration(seconds: 5));
       Object? err;
       t.get('/x').then((_) {}, onError: (Object e) { err = e; });
-      async.elapse(const Duration(seconds: 6));
-      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
-      expect(closed, isTrue, reason: 'the dial-stdio channel must be released');
+      async.elapse(const Duration(minutes: 5));
+      expect(err, isNull, reason: 'the API client, not the transport, bounds buffered calls');
+      expect(async.pendingTimers, isEmpty);
+      expect(closed, isFalse, reason: 'the call is still pending, so its channel stays open');
     });
   });
 
@@ -111,5 +112,11 @@ void main() {
   test('a failed dial surfaces as DockerError.network', () async {
     final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
     expect(t.get('/x'), throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('a failed exec dial surfaces as DockerError.network', () async {
+    final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
+    expect(t.execAttach('e1', cols: 80, rows: 24),
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
   });
 }
