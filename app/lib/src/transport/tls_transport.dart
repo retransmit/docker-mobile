@@ -8,7 +8,9 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../api/docker_error.dart';
 import 'duplex_exec_channel.dart';
+import 'timeouts.dart';
 import 'transport.dart';
 
 export 'duplex_exec_channel.dart' show SocketExecChannel;
@@ -18,11 +20,13 @@ class TlsTransport implements Transport {
   final Uri baseUri;
   final http.Client _client;
   final Future<ExecChannel> Function(String execId, int cols, int rows)? _execOpener;
+  final Duration streamHeaderTimeout;
 
   TlsTransport({
     required this.baseUri,
     required http.Client client,
     Future<ExecChannel> Function(String execId, int cols, int rows)? execOpener,
+    this.streamHeaderTimeout = kStreamHeaderTimeout,
   })  : _client = client,
         _execOpener = execOpener;
 
@@ -52,21 +56,21 @@ class TlsTransport implements Transport {
     StreamSubscription<List<int>>? sub;
     controller.onListen = () async {
       try {
-        final response = await _client.send(request);
+        final response = await _client.send(request).timeout(streamHeaderTimeout);
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
-          controller.addError(TransportException(response.statusCode, body));
+          controller.addError(DockerError.fromResponse(response.statusCode, body));
           await controller.close();
           return;
         }
         sub = response.stream.listen(
           controller.add,
-          onError: controller.addError,
+          onError: (Object e, StackTrace st) => controller.addError(DockerError.wrap(e), st),
           onDone: () => controller.close(),
           cancelOnError: true,
         );
-      } catch (e) {
-        controller.addError(e);
+      } catch (e, st) {
+        controller.addError(DockerError.wrap(e), st);
         await controller.close();
       }
     };
