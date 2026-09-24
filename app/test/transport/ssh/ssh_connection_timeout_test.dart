@@ -65,13 +65,26 @@ void main() {
     expect(aborted.retryable, isTrue);
   });
 
+  test('mapSshError reports an unreadable private key', () {
+    for (final e in [SSHKeyDecodeError('Failed to decode private key'), SSHKeyDecryptError('Invalid passphrase')]) {
+      final mapped = mapSshError(e);
+      expect(mapped.kind, DockerErrorKind.unauthorized, reason: '$e');
+      expect(mapped.message, 'SSH private key could not be read - check the key and passphrase', reason: '$e');
+      expect(mapped.retryable, isFalse, reason: '$e');
+    }
+  });
+
   test('a client that cannot be built releases the socket', () async {
     final socket = _FakeSocket();
     const keyCreds = SshCredentials(
         host: 'h', port: 22, username: 'u', authMethod: SshAuthMethod.key, privateKeyPem: 'not a key');
     final conn = RealSshConnection(keyCreds, connector: (_, _, _) async => socket);
-    await expectLater(conn.connect(verifyHostKey: (_) => true),
-        throwsA(isA<DockerError>().having((e) => e.cause, 'cause', isA<FormatException>())));
+    await expectLater(
+        conn.connect(verifyHostKey: (_) => true),
+        throwsA(isA<DockerError>()
+            .having((e) => e.kind, 'kind', DockerErrorKind.unauthorized)
+            .having((e) => e.message, 'message', 'SSH private key could not be read - check the key and passphrase')
+            .having((e) => e.cause, 'cause', isA<FormatException>())));
     expect(socket.closed, isTrue);
   });
 }

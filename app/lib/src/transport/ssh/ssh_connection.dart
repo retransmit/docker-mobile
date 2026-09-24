@@ -87,6 +87,12 @@ typedef SshSocketConnector = Future<SSHSocket> Function(String host, int port, D
 Future<SSHSocket> _defaultConnector(String host, int port, Duration timeout) =>
     SSHSocket.connect(host, port, timeout: timeout);
 
+/// A private key that fails to parse or decrypt: not retryable until the user
+/// fixes the key or passphrase.
+DockerError _unreadableKey(Object cause) => DockerError(
+    DockerErrorKind.unauthorized, 'SSH private key could not be read - check the key and passphrase',
+    cause: cause);
+
 /// Maps SSH-layer failures to [DockerError]. Public for tests.
 DockerError mapSshError(Object e) {
   if (e is DockerError) return e;
@@ -98,6 +104,8 @@ DockerError mapSshError(Object e) {
   // dartssh2 2.18 surfaces a rejected host key as an SSHAuthAbortError (above);
   // the launcher's verifier flag is the source of truth for a mismatch.
   if (e is SSHHostkeyError) return DockerError(DockerErrorKind.unauthorized, 'SSH host key rejected', cause: e);
+  // Also covers SSHKeyDecryptError (a wrong or missing passphrase), which extends it.
+  if (e is SSHKeyDecodeError) return _unreadableKey(e);
   if (e is SSHError) return DockerError(DockerErrorKind.network, 'SSH error: $e', cause: e);
   return DockerError.fromException(e);
 }
@@ -138,9 +146,10 @@ class RealSshConnection implements SshConnection {
       );
     } catch (e, st) {
       // A bad key or passphrase throws here (SSHKeyPair.fromPem): release the
-      // already-connected socket rather than leak it.
+      // already-connected socket rather than leak it. Text that is not PEM at
+      // all fails as a FormatException, which is the same unreadable key.
       socket.destroy();
-      Error.throwWithStackTrace(mapSshError(e), st);
+      Error.throwWithStackTrace(e is FormatException ? _unreadableKey(e) : mapSshError(e), st);
     }
     _client = client;
     try {

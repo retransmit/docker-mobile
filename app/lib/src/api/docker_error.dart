@@ -69,6 +69,9 @@ class DockerError implements Exception {
       return DockerError(DockerErrorKind.network, _clip(e.message ?? 'WebSocket connection failed'), cause: e);
     }
     if (e is IOException) return DockerError(DockerErrorKind.network, _clip(e.toString()), cause: e);
+    // A body that is not JSON (say a captive portal's HTML page served with a
+    // 200) must never reach the screen as markup.
+    if (e is FormatException) return DockerError(DockerErrorKind.unknown, 'Unexpected response from the daemon', cause: e);
     return DockerError(DockerErrorKind.unknown, _clip(e.toString()), cause: e);
   }
 

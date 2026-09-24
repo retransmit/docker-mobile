@@ -77,6 +77,12 @@ void main() {
       expect(e.retryable, isFalse);
     });
 
+    test('a reply that is not JSON reads as an unexpected response, never as markup', () {
+      final e = DockerError.fromException(const FormatException('<html>...'));
+      expect(e.kind, DockerErrorKind.unknown);
+      expect(e.message, 'Unexpected response from the daemon');
+    });
+
     test('a DockerError passes through unchanged; wrap is idempotent', () {
       const original = DockerError(DockerErrorKind.conflict, 'busy', statusCode: 409);
       expect(identical(DockerError.fromException(original), original), isTrue);
