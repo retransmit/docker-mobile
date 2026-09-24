@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_api_client.dart';
+import 'package:docker_mobile/src/transport/transport.dart';
 
 import '../support/fake_transport.dart';
 
@@ -172,6 +173,7 @@ void main() {
       client.listContainers().then((_) {}, onError: (Object e) { error = e; });
       async.elapse(const Duration(minutes: 5));
       expect(error, isNull);
+      expect(async.pendingTimers, isEmpty);
     });
   });
 
@@ -191,4 +193,78 @@ void main() {
     await DockerApiClient(t, apiVersion: '1.45').streamEvents().toList();
     expect(t.lastPath, '/v1.45/events');
   });
+
+  test('no-timeout calls wait as long as the daemon takes', () {
+    fakeAsync((async) {
+      final t = FakeTransport()..hangOn('POST', '/containers/c1/stop');
+      final client = DockerApiClient(t);
+      Object? error;
+      client.stopContainer('c1').then((_) {}, onError: (Object e) { error = e; });
+      async.elapse(const Duration(minutes: 5));
+      expect(error, isNull);
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
+
+  test('default budget still applies to a call without the escape hatch', () {
+    fakeAsync((async) {
+      final t = FakeTransport()..hangOn('POST', '/containers/c1/kill');
+      final client = DockerApiClient(t, requestTimeout: const Duration(seconds: 5));
+      Object? error;
+      client.killContainer('c1').then((_) {}, onError: (Object e) { error = e; });
+      async.elapse(const Duration(seconds: 6));
+      expect(error, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  test('an apiVersion that normalises to empty leaves paths unprefixed', () async {
+    final t = FakeTransport.always(http.Response('[]', 200));
+    await DockerApiClient(t, apiVersion: ' v ').listContainers();
+    expect(t.lastPath, '/containers/json');
+  });
+
+  test('postStream paths are prefixed and errors wrapped', () async {
+    final t = FakeTransport()..onPostStream(RegExp('.*'), (_) => const Stream.empty());
+    final client = DockerApiClient(t, apiVersion: '1.45');
+    await client.pullImage('nginx').toList();
+    expect(t.lastPath, '/v1.45/images/create');
+
+    t.throwOn('POSTSTREAM', RegExp('.*'), const SocketException('gone'));
+    await expectLater(client.pullImage('nginx').first,
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('a synchronous transport throw on stream is wrapped', () async {
+    await expectLater(DockerApiClient(_SyncThrowingTransport()).streamEvents().first,
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.unknown)));
+  });
+}
+
+/// A transport whose [stream] throws synchronously instead of returning an
+/// erroring stream, which no FakeTransport rule can do.
+class _SyncThrowingTransport implements Transport {
+  @override
+  Stream<List<int>> stream(String path, {Map<String, String>? query}) => throw StateError('boom');
+
+  @override
+  Future<http.Response> get(String path, {Map<String, String>? query}) => throw UnimplementedError();
+
+  @override
+  Future<http.Response> post(String path,
+          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<http.Response> delete(String path, {Map<String, String>? query}) => throw UnimplementedError();
+
+  @override
+  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> close() => throw UnimplementedError();
 }

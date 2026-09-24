@@ -44,41 +44,46 @@ class DockerApiClient {
     return n.isEmpty ? path : '/v$n$path';
   }
 
-  Future<http.Response> _guard(Future<http.Response> Function() call) async {
+  /// Buffered calls time out after [requestTimeout] unless the caller opts out
+  /// with [noTimeout] for a call the daemon may legitimately hold open.
+  Future<http.Response> _guard(Future<http.Response> Function() call, {bool noTimeout = false}) async {
     try {
       final f = call();
       final t = requestTimeout;
-      return await (t == null ? f : f.timeout(t));
-    } catch (e) {
-      throw DockerError.wrap(e);
+      return await (!noTimeout && t != null ? f.timeout(t) : f);
+    } catch (e, st) {
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
     }
   }
 
-  Future<http.Response> _get(String path, {Map<String, String>? query}) =>
-      _guard(() => transport.get(_p(path), query: query));
+  Future<http.Response> _get(String path, {Map<String, String>? query, bool noTimeout = false}) =>
+      _guard(() => transport.get(_p(path), query: query), noTimeout: noTimeout);
 
   Future<http.Response> _post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
-      _guard(() => transport.post(_p(path), query: query, body: body, headers: headers));
+          {Map<String, String>? query, Object? body, Map<String, String>? headers, bool noTimeout = false}) =>
+      _guard(() => transport.post(_p(path), query: query, body: body, headers: headers),
+          noTimeout: noTimeout);
 
-  Future<http.Response> _delete(String path, {Map<String, String>? query}) =>
-      _guard(() => transport.delete(_p(path), query: query));
+  Future<http.Response> _delete(String path, {Map<String, String>? query, bool noTimeout = false}) =>
+      _guard(() => transport.delete(_p(path), query: query), noTimeout: noTimeout);
 
   Stream<List<int>> _stream(String path, {Map<String, String>? query}) =>
-      _wrapErrors(transport.stream(_p(path), query: query));
+      _wrapErrors(() => transport.stream(_p(path), query: query));
 
   Stream<List<int>> _postStream(String path, {Map<String, String>? query, Object? body}) =>
-      _wrapErrors(transport.postStream(_p(path), query: query, body: body));
+      _wrapErrors(() => transport.postStream(_p(path), query: query, body: body));
 
   /// Re-raises anything the transport emits as a [DockerError]. Cancelling the
-  /// returned stream cancels the source.
-  Stream<List<int>> _wrapErrors(Stream<List<int>> source) async* {
+  /// returned stream cancels the source at the source's next event (an async*
+  /// generator suspended at an await cannot be cancelled earlier).
+  Stream<List<int>> _wrapErrors(Stream<List<int>> Function() open) async* {
     try {
+      final source = open();
       await for (final chunk in source) {
         yield chunk;
       }
-    } catch (e) {
-      throw DockerError.wrap(e);
+    } catch (e, st) {
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
     }
   }
 
@@ -199,11 +204,13 @@ class DockerApiClient {
   Future<void> startContainer(String id) async =>
       _ensure(await _post('/containers/$id/start'), ok: const {204, 304});
 
+  /// No timeout: the daemon holds this open until the container exits.
   Future<void> stopContainer(String id) async =>
-      _ensure(await _post('/containers/$id/stop'), ok: const {204, 304});
+      _ensure(await _post('/containers/$id/stop', noTimeout: true), ok: const {204, 304});
 
+  /// No timeout: the daemon holds this open until the container exits and restarts.
   Future<void> restartContainer(String id) async =>
-      _ensure(await _post('/containers/$id/restart'));
+      _ensure(await _post('/containers/$id/restart', noTimeout: true));
 
   Future<void> pauseContainer(String id) async =>
       _ensure(await _post('/containers/$id/pause'));
@@ -271,12 +278,17 @@ class DockerApiClient {
   Future<void> tagImage(String id, {required String repo, String tag = 'latest'}) async =>
       _ensure(await _post('/images/$id/tag', query: {'repo': repo, 'tag': tag}), ok: const {201});
 
-  Future<void> removeImage(String id, {bool force = false, bool noprune = false}) async =>
-      _ensure(await _delete('/images/$id', query: {'force': '$force', 'noprune': '$noprune'}), ok: const {200});
+  /// No timeout: removing an image and its layers can run for minutes on large hosts.
+  Future<void> removeImage(String id, {bool force = false, bool noprune = false}) async => _ensure(
+        await _delete('/images/$id', query: {'force': '$force', 'noprune': '$noprune'}, noTimeout: true),
+        ok: const {200},
+      );
 
+  /// No timeout: prune calls can run for minutes on large hosts.
   Future<void> pruneImages({bool danglingOnly = true}) async => _ensure(
         await _post('/images/prune',
-            query: {'filters': jsonEncode({'dangling': [danglingOnly ? 'true' : 'false']})}),
+            query: {'filters': jsonEncode({'dangling': [danglingOnly ? 'true' : 'false']})},
+            noTimeout: true),
         ok: const {200},
       );
 
@@ -332,8 +344,9 @@ class DockerApiClient {
   Future<void> removeNetwork(String id) async =>
       _ensure(await _delete('/networks/$id'), ok: const {204});
 
+  /// No timeout: prune calls can run for minutes on large hosts.
   Future<void> pruneNetworks() async =>
-      _ensure(await _post('/networks/prune'), ok: const {200});
+      _ensure(await _post('/networks/prune', noTimeout: true), ok: const {200});
 
   Future<List<DockerVolume>> listVolumes() async {
     final resp = await _get('/volumes');
@@ -365,8 +378,9 @@ class DockerApiClient {
   Future<void> removeVolume(String name, {bool force = false}) async =>
       _ensure(await _delete('/volumes/$name', query: {'force': '$force'}), ok: const {204});
 
+  /// No timeout: prune calls can run for minutes on large hosts.
   Future<void> pruneVolumes() async =>
-      _ensure(await _post('/volumes/prune'), ok: const {200});
+      _ensure(await _post('/volumes/prune', noTimeout: true), ok: const {200});
 
   Future<SystemInfo> getInfo() async {
     final resp = await _get('/info');
@@ -380,18 +394,21 @@ class DockerApiClient {
     return VersionInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
+  /// No timeout: disk-usage calls can run for minutes on large hosts.
   Future<DiskUsage> getDiskUsage() async {
-    final resp = await _get('/system/df');
+    final resp = await _get('/system/df', noTimeout: true);
     if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     final decoded = await _decodeJson(resp.body) as Map<String, dynamic>;
     return DiskUsage.fromJson(decoded);
   }
 
+  /// No timeout: prune calls can run for minutes on large hosts.
   Future<void> pruneContainers() async =>
-      _ensure(await _post('/containers/prune'), ok: const {200});
+      _ensure(await _post('/containers/prune', noTimeout: true), ok: const {200});
 
+  /// No timeout: prune calls can run for minutes on large hosts.
   Future<void> pruneBuildCache() async =>
-      _ensure(await _post('/build/prune'), ok: const {200});
+      _ensure(await _post('/build/prune', noTimeout: true), ok: const {200});
 
   Future<void> systemPrune({bool allImages = false, bool includeVolumes = false}) async {
     await pruneContainers();

@@ -76,7 +76,9 @@ class FakeTransport implements Transport {
 
   /// Every GET stream yields [stream]; buffered GETs answer `{}` 200 so an
   /// inspect-before-stream call succeeds.
-  /// The same Stream instance is handed to every stream() call, so pass a broadcast or multi-subscription stream if the code under test subscribes more than once.
+  /// The same Stream instance is handed to every stream() call, so pass a
+  /// broadcast or multi-subscription stream if the code under test subscribes
+  /// more than once.
   factory FakeTransport.streaming(Stream<List<int>> stream) => FakeTransport()
     ..onGet(RegExp('.*'), (_) => http.Response('{}', 200))
     ..onStream(RegExp('.*'), (_) => stream);
