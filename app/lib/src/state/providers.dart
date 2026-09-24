@@ -16,9 +16,6 @@ import '../transport/transport.dart';
 /// The active transport, set once the user connects. Null = not connected.
 final transportProvider = StateProvider<Transport?>((ref) => null);
 
-/// The secure credential store (overridden with an in-memory fake in tests).
-final credentialStoreProvider = Provider<CredentialStore>((ref) => SecureCredentialStore());
-
 /// The saved connection profiles store (overridden with an in-memory fake in tests).
 final profileStoreProvider = Provider<ProfileStore>((ref) => SecureProfileStore());
 
