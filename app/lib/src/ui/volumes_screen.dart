@@ -45,8 +45,10 @@ class VolumesScreen extends ConsumerWidget {
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {
-              ref.invalidate(volumesProvider);
-              await ref.read(volumesProvider.future);
+              try {
+                ref.invalidate(volumesProvider);
+                await ref.read(volumesProvider.future);
+              } catch (_) {}
             },
             child: list.isEmpty
                 ? ListView(

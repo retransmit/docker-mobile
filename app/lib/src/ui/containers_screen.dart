@@ -49,8 +49,10 @@ class ContainersScreen extends ConsumerWidget {
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {
-              ref.invalidate(containersProvider);
-              await ref.read(containersProvider.future);
+              try {
+                ref.invalidate(containersProvider);
+                await ref.read(containersProvider.future);
+              } catch (_) {}
             },
             child: list.isEmpty
                 ? ListView(

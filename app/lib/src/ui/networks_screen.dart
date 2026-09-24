@@ -45,8 +45,10 @@ class NetworksScreen extends ConsumerWidget {
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {
-              ref.invalidate(networksProvider);
-              await ref.read(networksProvider.future);
+              try {
+                ref.invalidate(networksProvider);
+                await ref.read(networksProvider.future);
+              } catch (_) {}
             },
             child: list.isEmpty
                 ? ListView(

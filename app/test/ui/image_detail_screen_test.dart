@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/api/docker_error.dart';
+import 'package:docker_mobile/src/api/models/image_detail.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/image_detail_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 
 import '../support/fake_transport.dart';
 
@@ -80,5 +83,43 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(t.posts.map((c) => c.path), contains('/images/sha256:abc/tag'));
+  });
+
+  testWidgets('Retry reloads the history as well as the details', (tester) async {
+    var detailCalls = 0;
+    var historyCalls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        imageDetailProvider.overrideWith((ref, id) async {
+          detailCalls++;
+          if (detailCalls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return const ImageDetail(
+            id: 'sha256:abc',
+            repoTags: ['nginx:latest'],
+            architecture: 'amd64',
+            os: 'linux',
+            size: 100,
+            created: '2026-01-02T03:04:05Z',
+            env: [],
+            exposedPorts: [],
+          );
+        }),
+        imageHistoryProvider.overrideWith((ref, id) async {
+          historyCalls++;
+          if (historyCalls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return const [ImageHistoryLayer(id: 'l1', created: 0, createdBy: 'RUN apt-get', size: 10, tags: [])];
+        }),
+      ],
+      child: const MaterialApp(home: ImageDetailScreen(imageId: 'sha256:abc', title: 'nginx:latest')),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+
+    expect(detailCalls, 2);
+    expect(historyCalls, 2);
+    expect(find.textContaining('RUN apt-get'), findsWidgets);
   });
 }

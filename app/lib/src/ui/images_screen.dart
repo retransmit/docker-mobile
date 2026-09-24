@@ -52,8 +52,10 @@ class ImagesScreen extends ConsumerWidget {
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {
-              ref.invalidate(imagesProvider);
-              await ref.read(imagesProvider.future);
+              try {
+                ref.invalidate(imagesProvider);
+                await ref.read(imagesProvider.future);
+              } catch (_) {}
             },
             child: list.isEmpty
                 ? ListView(

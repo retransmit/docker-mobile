@@ -144,4 +144,30 @@ void main() {
     );
     expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
   });
+
+  testWidgets('a failed pull-to-refresh from the data state shows the error view without an unhandled error',
+      (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) {
+            return const [DockerContainer(id: 'a', names: ['/web'], image: 'nginx', state: 'running', status: 'Up')];
+          }
+          throw const DockerError(DockerErrorKind.network, 'down');
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('/web'), findsOneWidget);
+
+    await tester.fling(find.byType(ListView).first, const Offset(0, 300), 1000);
+    await tester.pumpAndSettle();
+
+    expect(calls, 2);
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ErrorView), findsOneWidget);
+  });
 }

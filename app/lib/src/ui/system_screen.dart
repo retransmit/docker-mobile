@@ -71,8 +71,10 @@ class SystemScreen extends ConsumerWidget {
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
-                    ref.invalidate(systemDashboardProvider);
-                    await ref.read(systemDashboardProvider.future);
+                    try {
+                      ref.invalidate(systemDashboardProvider);
+                      await ref.read(systemDashboardProvider.future);
+                    } catch (_) {}
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),

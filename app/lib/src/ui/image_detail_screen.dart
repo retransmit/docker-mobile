@@ -31,7 +31,14 @@ class ImageDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(title)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(imageDetailProvider(imageId)), busy: detail.isRefreshing),
+        error: (e, _) => ErrorView(
+          error: e,
+          onRetry: () {
+            ref.invalidate(imageDetailProvider(imageId));
+            ref.invalidate(imageHistoryProvider(imageId));
+          },
+          busy: detail.isRefreshing,
+        ),
         data: (d) => ListView(
           padding: const EdgeInsets.all(16),
           children: [
