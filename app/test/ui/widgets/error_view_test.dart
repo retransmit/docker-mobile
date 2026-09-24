@@ -50,4 +50,52 @@ void main() {
     expect(find.byType(ListView), findsOneWidget);
     expect(find.text('boom'), findsOneWidget);
   });
+
+  testWidgets('short viewport does not overflow and Retry is reachable by scrolling', (tester) async {
+    tester.view.physicalSize = const Size(800, 300);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var tapped = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: const Text('x')),
+        body: ErrorView(
+          error: const DockerError(DockerErrorKind.server, 'boom'),
+          onRetry: () => tapped++,
+          secondary: TextButton(onPressed: () {}, child: const Text('Disconnect')),
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+    await tester.dragUntilVisible(find.text('Retry'), find.byType(SingleChildScrollView), const Offset(0, -50));
+    await tester.tap(find.text('Retry'));
+    expect(tapped, 1);
+  });
+
+  testWidgets('scrollable variant on a short viewport does not overflow and can scroll', (tester) async {
+    tester.view.physicalSize = const Size(800, 300);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var tapped = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(title: const Text('x')),
+        body: RefreshIndicator(
+          onRefresh: () async {},
+          child: ErrorView(
+            error: const DockerError(DockerErrorKind.server, 'boom'),
+            onRetry: () => tapped++,
+            secondary: TextButton(onPressed: () {}, child: const Text('Disconnect')),
+            scrollable: true,
+          ),
+        ),
+      ),
+    ));
+    expect(tester.takeException(), isNull);
+    await tester.dragUntilVisible(find.text('Retry'), find.byType(ListView), const Offset(0, -50));
+    await tester.tap(find.text('Retry'));
+    expect(tapped, 1);
+  });
 }

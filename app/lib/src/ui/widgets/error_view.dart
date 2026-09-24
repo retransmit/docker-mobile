@@ -4,7 +4,9 @@ import '../../api/docker_error.dart';
 
 /// The one error state used everywhere: an icon and title for the error kind,
 /// the daemon's message, and a Retry button when [onRetry] is given.
-/// [scrollable] wraps it in a ListView so a RefreshIndicator above it works.
+/// It centers itself when there is room and scrolls when the viewport is
+/// shorter than its content. [scrollable] selects a ListView with
+/// AlwaysScrollableScrollPhysics so a RefreshIndicator above it works.
 class ErrorView extends StatelessWidget {
   final Object error;
   final VoidCallback? onRetry;
@@ -72,12 +74,20 @@ class ErrorView extends StatelessWidget {
         ),
       ),
     );
-    if (!scrollable) return body;
     return LayoutBuilder(
-      builder: (context, constraints) => ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [SizedBox(height: constraints.maxHeight, child: body)],
-      ),
+      builder: (context, constraints) {
+        final content = ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.hasBoundedHeight ? constraints.maxHeight : 0),
+          child: body,
+        );
+        if (scrollable) {
+          return ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [content],
+          );
+        }
+        return SingleChildScrollView(child: content);
+      },
     );
   }
 }
