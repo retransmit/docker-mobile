@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
+import '../../api/docker_error.dart';
 import '../../storage/credential_store.dart';
+import '../timeouts.dart';
 import 'stream_http.dart';
 
 /// A raw bidirectional byte stream to the remote dockerd socket.
@@ -78,14 +81,41 @@ abstract class SshConnection {
 
 String _stripSha256Prefix(String fp) => fp.startsWith('SHA256:') ? fp.substring(7) : fp;
 
+/// Opens the TCP socket to an SSH server, giving up after `timeout`.
+typedef SshSocketConnector = Future<SSHSocket> Function(String host, int port, Duration timeout);
+
+Future<SSHSocket> _defaultConnector(String host, int port, Duration timeout) =>
+    SSHSocket.connect(host, port, timeout: timeout);
+
+/// Maps SSH-layer failures to [DockerError]. Public for tests.
+DockerError mapSshError(Object e) {
+  if (e is DockerError) return e;
+  if (e is TimeoutException) return DockerError(DockerErrorKind.timeout, 'SSH connection timed out', cause: e);
+  if (e is SSHAuthError) return DockerError(DockerErrorKind.unauthorized, 'SSH authentication failed', cause: e);
+  if (e is SSHHostkeyError) return DockerError(DockerErrorKind.unauthorized, 'SSH host key rejected', cause: e);
+  if (e is SSHError) return DockerError(DockerErrorKind.network, 'SSH error: $e', cause: e);
+  return DockerError.fromException(e);
+}
+
 class RealSshConnection implements SshConnection {
   final SshCredentials creds;
+  final SshSocketConnector _connector;
+  final Duration _connectTimeout;
   SSHClient? _client;
-  RealSshConnection(this.creds);
+
+  RealSshConnection(this.creds, {SshSocketConnector? connector, Duration connectTimeout = kConnectTimeout})
+      : _connector = connector ?? _defaultConnector,
+        // ignore: prefer_initializing_formals
+        _connectTimeout = connectTimeout;
 
   @override
   Future<void> connect({required HostKeyVerifier verifyHostKey}) async {
-    final socket = await SSHSocket.connect(creds.host, creds.port);
+    final SSHSocket socket;
+    try {
+      socket = await _connector(creds.host, creds.port, _connectTimeout).timeout(_connectTimeout);
+    } catch (e) {
+      throw mapSshError(e);
+    }
     final client = SSHClient(
       socket,
       username: creds.username,
@@ -101,13 +131,13 @@ class RealSshConnection implements SshConnection {
     );
     _client = client;
     try {
-      await client.authenticated; // forces handshake + host-key callback + auth
-    } catch (_) {
+      await client.authenticated.timeout(_connectTimeout); // handshake + host-key callback + auth
+    } catch (e) {
       // Auth / host-key-mismatch / post-handshake failure: reclaim the socket
       // rather than leaving a live client (and a channel to a suspicious host).
       client.close();
       _client = null;
-      rethrow;
+      throw mapSshError(e);
     }
   }
 

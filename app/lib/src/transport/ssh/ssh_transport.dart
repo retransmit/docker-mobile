@@ -6,7 +6,9 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../../api/docker_error.dart';
 import '../duplex_exec_channel.dart';
+import '../timeouts.dart';
 import '../transport.dart';
 import 'ssh_connection.dart';
 import 'stream_http.dart';
@@ -19,13 +21,25 @@ String _pathWithQuery(String path, Map<String, String>? query) =>
 class SshTransport implements Transport {
   final Future<Duplex> Function() _openDuplex;
   final Future<void> Function()? _onClose;
-  SshTransport({required Future<Duplex> Function() openDuplex, Future<void> Function()? onClose})
-      : _openDuplex = openDuplex,
+
+  /// Budget for the daemon's answer: a buffered call's whole response, or the
+  /// headers of a stream or exec upgrade. Stream bodies never time out.
+  final Duration headerTimeout;
+  SshTransport({
+    required Future<Duplex> Function() openDuplex,
+    Future<void> Function()? onClose,
+    this.headerTimeout = kStreamHeaderTimeout,
+  })  : _openDuplex = openDuplex,
         _onClose = onClose;
 
   Future<http.Response> _send(String method, String path,
       {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
-    final conn = await _openDuplex();
+    final Duplex conn;
+    try {
+      conn = await _openDuplex();
+    } catch (e, st) {
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
+    }
     try {
       final h = <String, String>{...?headers};
       List<int>? bodyBytes;
@@ -35,8 +49,10 @@ class SshTransport implements Transport {
       }
       writeHttpRequest(conn.add,
           method: method, path: _pathWithQuery(path, query), headers: h.isEmpty ? null : h, body: bodyBytes);
-      final r = await readBufferedResponse(conn.input);
+      final r = await readBufferedResponse(conn.input).timeout(headerTimeout);
       return http.Response.bytes(r.body, r.statusCode, headers: r.headers);
+    } catch (e, st) {
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
     } finally {
       await conn.close();
     }
@@ -71,10 +87,10 @@ class SshTransport implements Transport {
         }
         writeHttpRequest(conn!.add,
             method: method, path: _pathWithQuery(path, query), headers: h.isEmpty ? null : h, body: bodyBytes);
-        final resp = await readHttpResponse(conn!.input);
+        final resp = await readHttpResponse(conn!.input).timeout(headerTimeout);
         if (resp.statusCode != 200) {
           final b = await resp.body.expand((c) => c).toList();
-          controller.addError(TransportException(resp.statusCode, utf8.decode(b, allowMalformed: true)));
+          controller.addError(DockerError.fromResponse(resp.statusCode, utf8.decode(b, allowMalformed: true)));
           await controller.close();
           await conn!.close();
           return;
@@ -90,7 +106,7 @@ class SshTransport implements Transport {
           // the controller AND the channel, mirroring onDone.
           onError: (Object e, StackTrace st) async {
             if (cancelled) return;
-            controller.addError(e, st);
+            controller.addError(DockerError.wrap(e), st);
             await controller.close();
             await conn!.close();
           },
@@ -101,8 +117,8 @@ class SshTransport implements Transport {
           },
           cancelOnError: true,
         );
-      } catch (e) {
-        controller.addError(e);
+      } catch (e, st) {
+        controller.addError(DockerError.wrap(e), st);
         await controller.close();
         await conn?.close();
       }
@@ -138,17 +154,17 @@ class SshTransport implements Transport {
         headers: {'Connection': 'Upgrade', 'Upgrade': 'tcp', 'Content-Type': 'application/json'},
         body: utf8.encode(jsonEncode({'Detach': false, 'Tty': true})),
       );
-      final resp = await readHttpResponse(conn.input);
+      final resp = await readHttpResponse(conn.input).timeout(headerTimeout);
       // A successful hijack is 101 (Upgrade) or a 2xx; anything >=400 is an
       // error body, not a duplex - surface it instead of returning a dead channel.
       if (resp.statusCode >= 400) {
         final body = await resp.body.expand((c) => c).toList();
-        throw TransportException(resp.statusCode, utf8.decode(body, allowMalformed: true));
+        throw DockerError.fromResponse(resp.statusCode, utf8.decode(body, allowMalformed: true));
       }
       return SocketExecChannel(input: resp.body, onSend: conn.add, onClose: conn.close);
-    } catch (_) {
+    } catch (e, st) {
       await conn.close(); // never leak the dial-stdio channel on a failed upgrade
-      rethrow;
+      Error.throwWithStackTrace(DockerError.wrap(e), st);
     }
   }
 

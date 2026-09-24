@@ -1,15 +1,5 @@
 import 'package:http/http.dart' as http;
 
-/// Thrown into a [Transport.stream] when the daemon responds with a non-200.
-class TransportException implements Exception {
-  final int statusCode;
-  final String body;
-  const TransportException(this.statusCode, this.body);
-
-  @override
-  String toString() => 'TransportException($statusCode): $body';
-}
-
 /// A live bidirectional exec session (WebSocket over the agent in 1B).
 abstract class ExecChannel {
   Stream<List<int>> get output;
