@@ -20,13 +20,21 @@ class TlsTransport implements Transport {
   final Uri baseUri;
   final http.Client _client;
   final Future<ExecChannel> Function(String execId, int cols, int rows)? _execOpener;
+
+  /// Budget for the response headers of a GET stream; stream bodies never time out.
   final Duration streamHeaderTimeout;
+
+  /// Budget for the response headers of a POST stream. dockerd sends the
+  /// headers of `POST /images/create` only with the first progress line,
+  /// after the registry handshake, so a pull gets the long budget.
+  final Duration postStreamHeaderTimeout;
 
   TlsTransport({
     required this.baseUri,
     required http.Client client,
     Future<ExecChannel> Function(String execId, int cols, int rows)? execOpener,
     this.streamHeaderTimeout = kStreamHeaderTimeout,
+    this.postStreamHeaderTimeout = kLongRequestTimeout,
   })  : _client = client,
         _execOpener = execOpener;
 
@@ -51,12 +59,12 @@ class TlsTransport implements Transport {
     return _client.post(uri, headers: h, body: encoded);
   }
 
-  Stream<List<int>> _openStream(http.Request request) {
+  Stream<List<int>> _openStream(http.Request request, Duration headerBudget) {
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
     controller.onListen = () async {
       try {
-        final response = await _client.send(request).timeout(streamHeaderTimeout);
+        final response = await _client.send(request).timeout(headerBudget);
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
           controller.addError(DockerError.fromResponse(response.statusCode, body));
@@ -81,7 +89,7 @@ class TlsTransport implements Transport {
 
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
-      _openStream(http.Request('GET', baseUri.replace(path: path, queryParameters: query)));
+      _openStream(http.Request('GET', baseUri.replace(path: path, queryParameters: query)), streamHeaderTimeout);
 
   @override
   Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) {
@@ -90,7 +98,7 @@ class TlsTransport implements Transport {
       request.headers['Content-Type'] = 'application/json';
       request.body = body is String ? body : jsonEncode(body);
     }
-    return _openStream(request);
+    return _openStream(request, postStreamHeaderTimeout);
   }
 
   @override

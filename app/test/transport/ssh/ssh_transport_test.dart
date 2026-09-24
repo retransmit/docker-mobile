@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/ssh/ssh_connection.dart';
 import 'package:docker_mobile/src/transport/ssh/ssh_transport.dart';
+import 'package:docker_mobile/src/transport/timeouts.dart';
 
 Duplex _duplex(List<int> response, List<int> written, {void Function()? onClose}) => Duplex(
       input: Stream.value(response),
@@ -118,5 +119,35 @@ void main() {
     final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
     expect(t.execAttach('e1', cols: 80, rows: 24),
         throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('pull headers that arrive after the stream header budget still deliver the body', () {
+    fakeAsync((async) {
+      final input = StreamController<List<int>>();
+      final t = SshTransport(openDuplex: () async => Duplex(input: input.stream, add: (_) {}, close: () async {}));
+      final got = <int>[];
+      Object? err;
+      t.postStream('/images/create').listen(got.addAll, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 31));
+      input.add(ascii.encode('HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello'));
+      async.flushMicrotasks();
+      expect(utf8.decode(got), 'hello');
+      expect(err, isNull);
+    });
+  });
+
+  test('pull headers that never arrive time out after the long budget', () {
+    fakeAsync((async) {
+      var closed = false;
+      final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async => closed = true);
+      final t = SshTransport(openDuplex: () async => conn);
+      Object? err;
+      t.postStream('/images/create').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(kLongRequestTimeout - const Duration(seconds: 1));
+      expect(err, isNull);
+      async.elapse(const Duration(seconds: 2));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+      expect(closed, isTrue);
+    });
   });
 }

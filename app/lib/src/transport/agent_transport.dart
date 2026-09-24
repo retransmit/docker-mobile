@@ -16,7 +16,14 @@ class AgentTransport implements Transport {
   final String token;
   final http.Client _client;
   final http.Client Function() _streamClientFactory;
+
+  /// Budget for the response headers of a GET stream; stream bodies never time out.
   final Duration streamHeaderTimeout;
+
+  /// Budget for the response headers of a POST stream. dockerd sends the
+  /// headers of `POST /images/create` only with the first progress line,
+  /// after the registry handshake, so a pull gets the long budget.
+  final Duration postStreamHeaderTimeout;
 
   /// Socket connect budget for the HTTP clients and the exec WebSocket.
   final Duration connectTimeout;
@@ -28,6 +35,7 @@ class AgentTransport implements Transport {
     http.Client Function()? streamClientFactory,
     this.connectTimeout = kConnectTimeout,
     this.streamHeaderTimeout = kStreamHeaderTimeout,
+    this.postStreamHeaderTimeout = kLongRequestTimeout,
   })  : _client = client ?? _ioClient(connectTimeout),
         _streamClientFactory = streamClientFactory ?? (() => _ioClient(connectTimeout));
 
@@ -40,7 +48,7 @@ class AgentTransport implements Transport {
     return _client.get(uri, headers: {'Authorization': 'Bearer $token'});
   }
 
-  Stream<List<int>> _openStream(http.Request request) {
+  Stream<List<int>> _openStream(http.Request request, Duration headerBudget) {
     final client = _streamClientFactory();
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
@@ -55,7 +63,7 @@ class AgentTransport implements Transport {
     controller.onListen = () async {
       try {
         request.headers['Authorization'] = 'Bearer $token';
-        final response = await client.send(request).timeout(streamHeaderTimeout);
+        final response = await client.send(request).timeout(headerBudget);
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
           controller.addError(DockerError.fromResponse(response.statusCode, body));
@@ -88,7 +96,7 @@ class AgentTransport implements Transport {
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) {
     final uri = baseUri.replace(path: path, queryParameters: query);
-    return _openStream(http.Request('GET', uri));
+    return _openStream(http.Request('GET', uri), streamHeaderTimeout);
   }
 
   @override
@@ -99,7 +107,7 @@ class AgentTransport implements Transport {
       request.headers['Content-Type'] = 'application/json';
       request.body = body is String ? body : jsonEncode(body);
     }
-    return _openStream(request);
+    return _openStream(request, postStreamHeaderTimeout);
   }
 
   @override

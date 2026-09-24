@@ -22,13 +22,20 @@ class SshTransport implements Transport {
   final Future<Duplex> Function() _openDuplex;
   final Future<void> Function()? _onClose;
 
-  /// Budget for the response headers of a stream or an exec upgrade; stream
-  /// bodies never time out. Buffered calls are bounded by the API client.
+  /// Budget for the response headers of a GET stream or an exec upgrade;
+  /// stream bodies never time out. Buffered calls are bounded by the API client.
   final Duration headerTimeout;
+
+  /// Budget for the response headers of a POST stream. dockerd sends the
+  /// headers of `POST /images/create` only with the first progress line,
+  /// after the registry handshake, so a pull gets the long budget.
+  final Duration postStreamHeaderTimeout;
+
   SshTransport({
     required Future<Duplex> Function() openDuplex,
     Future<void> Function()? onClose,
     this.headerTimeout = kStreamHeaderTimeout,
+    this.postStreamHeaderTimeout = kLongRequestTimeout,
   })  : _openDuplex = openDuplex,
         _onClose = onClose;
 
@@ -71,7 +78,7 @@ class SshTransport implements Transport {
           {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
       _send('POST', path, query: query, body: body, headers: headers);
 
-  Stream<List<int>> _openStream(String method, String path,
+  Stream<List<int>> _openStream(String method, String path, Duration headerBudget,
       {Map<String, String>? query, Object? body}) {
     final controller = StreamController<List<int>>();
     Duplex? conn;
@@ -87,7 +94,7 @@ class SshTransport implements Transport {
         }
         writeHttpRequest(conn!.add,
             method: method, path: _pathWithQuery(path, query), headers: h.isEmpty ? null : h, body: bodyBytes);
-        final resp = await readHttpResponse(conn!.input).timeout(headerTimeout);
+        final resp = await readHttpResponse(conn!.input).timeout(headerBudget);
         if (resp.statusCode != 200) {
           final b = await resp.body.expand((c) => c).toList();
           controller.addError(DockerError.fromResponse(resp.statusCode, utf8.decode(b, allowMalformed: true)));
@@ -137,11 +144,11 @@ class SshTransport implements Transport {
 
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
-      _openStream('GET', path, query: query);
+      _openStream('GET', path, headerTimeout, query: query);
 
   @override
   Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
-      _openStream('POST', path, query: query, body: body);
+      _openStream('POST', path, postStreamHeaderTimeout, query: query, body: body);
 
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
