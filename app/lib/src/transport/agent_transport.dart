@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:web_socket_channel/io.dart';
 
+import '../api/docker_error.dart';
+import 'timeouts.dart';
 import 'transport.dart';
 
 /// Talks to the docker-mobile agent over HTTP(S) with a bearer token.
@@ -12,14 +16,20 @@ class AgentTransport implements Transport {
   final String token;
   final http.Client _client;
   final http.Client Function() _streamClientFactory;
+  final Duration streamHeaderTimeout;
 
   AgentTransport({
     required this.baseUri,
     required this.token,
     http.Client? client,
     http.Client Function()? streamClientFactory,
-  })  : _client = client ?? http.Client(),
-        _streamClientFactory = streamClientFactory ?? (() => http.Client());
+    Duration connectTimeout = kConnectTimeout,
+    this.streamHeaderTimeout = kStreamHeaderTimeout,
+  })  : _client = client ?? _ioClient(connectTimeout),
+        _streamClientFactory = streamClientFactory ?? (() => _ioClient(connectTimeout));
+
+  static http.Client _ioClient(Duration connectTimeout) =>
+      IOClient(HttpClient()..connectionTimeout = connectTimeout);
 
   @override
   Future<http.Response> get(String path, {Map<String, String>? query}) {
@@ -42,17 +52,17 @@ class AgentTransport implements Transport {
     controller.onListen = () async {
       try {
         request.headers['Authorization'] = 'Bearer $token';
-        final response = await client.send(request);
+        final response = await client.send(request).timeout(streamHeaderTimeout);
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
-          controller.addError(TransportException(response.statusCode, body));
+          controller.addError(DockerError.fromResponse(response.statusCode, body));
           await controller.close();
           closeClient();
           return;
         }
         sub = response.stream.listen(
           controller.add,
-          onError: controller.addError,
+          onError: (Object e, StackTrace st) => controller.addError(DockerError.wrap(e), st),
           onDone: () async {
             await controller.close();
             closeClient();
@@ -60,7 +70,7 @@ class AgentTransport implements Transport {
           cancelOnError: true,
         );
       } catch (e) {
-        controller.addError(e);
+        controller.addError(DockerError.wrap(e));
         await controller.close();
         closeClient();
       }
