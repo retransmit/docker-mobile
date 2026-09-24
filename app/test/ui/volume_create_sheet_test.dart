@@ -6,29 +6,7 @@ import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/volume_create_sheet.dart';
 
-class _FakeTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  Map<String, dynamic>? createBody;
-  int createStatus = 201;
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{"Volumes":[]}', 200);
-  @override
-  Future<http.Response> post(String path,
-      {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
-    if (path == '/volumes/create') createBody = body as Map<String, dynamic>;
-    return http.Response('{"Name":"data","Driver":"local"}', createStatus);
-  }
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) async => http.Response('', 204);
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
-      throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) => const Stream.empty();
-}
+import '../support/fake_transport.dart';
 
 Widget _wrap(Transport t) => ProviderScope(
       overrides: [transportProvider.overrideWith((ref) => t)],
@@ -37,7 +15,12 @@ Widget _wrap(Transport t) => ProviderScope(
 
 void main() {
   testWidgets('fills the form and creates a volume with a label', (tester) async {
-    final t = _FakeTransport();
+    Map<String, dynamic>? createBody;
+    final t = FakeTransport()
+      ..onPost('/volumes/create', (call) {
+        createBody = call.body as Map<String, dynamic>;
+        return http.Response('{"Name":"data","Driver":"local"}', 201);
+      });
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 
@@ -51,21 +34,22 @@ void main() {
     await tester.tap(find.widgetWithText(FilledButton, 'Create'));
     await tester.pumpAndSettle();
 
-    expect(t.createBody, isNotNull);
-    expect(t.createBody!['Name'], 'data');
-    expect(t.createBody!['Driver'], 'local');
-    expect(t.createBody!['Labels'], {'env': 'prod'});
+    expect(createBody, isNotNull);
+    expect(createBody!['Name'], 'data');
+    expect(createBody!['Driver'], 'local');
+    expect(createBody!['Labels'], {'env': 'prod'});
   });
 
   testWidgets('Create is disabled until a name is entered', (tester) async {
-    await tester.pumpWidget(_wrap(_FakeTransport()));
+    await tester.pumpWidget(_wrap(FakeTransport()));
     await tester.pumpAndSettle();
     final btn = tester.widget<FilledButton>(find.widgetWithText(FilledButton, 'Create'));
     expect(btn.onPressed, isNull);
   });
 
   testWidgets('a failing create shows an error snackbar without crashing', (tester) async {
-    final t = _FakeTransport()..createStatus = 500;
+    final t = FakeTransport()
+      ..onPost('/volumes/create', (_) => http.Response('{"Name":"data","Driver":"local"}', 500));
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
 

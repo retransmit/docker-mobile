@@ -7,34 +7,22 @@ import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/create_container_screen.dart';
 
-class _FakeTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  final List<String> posts = [];
-  int createStatus = 201;
-  List<int> pullBytes = utf8.encode('{"status":"Pull complete"}\n');
-  @override
-  Future<http.Response> post(String path, {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
-    posts.add(path);
-    if (path == '/containers/create') {
+import '../support/fake_transport.dart';
+
+FakeTransport createFake({int createStatus = 201}) {
+  var status = createStatus;
+  return FakeTransport()
+    ..onGet('/networks', (_) => http.Response('[]', 200))
+    ..onPost('/containers/abc/start', (_) => http.Response('', 204))
+    ..onPost('/containers/create', (_) {
       // First call may 404 (image missing); later calls succeed.
-      final status = createStatus;
-      if (status == 404) createStatus = 201; // next create succeeds (post-pull)
-      if (status == 404) return http.Response('{"message":"No such image: nginx"}', 404);
+      if (status == 404) {
+        status = 201; // next create succeeds (post-pull)
+        return http.Response('{"message":"No such image: nginx"}', 404);
+      }
       return http.Response('{"Id":"abc"}', 201);
-    }
-    return http.Response('', 204);
-  }
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('[]', 200);
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) async => http.Response('', 204);
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) => throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) => Stream.value(pullBytes);
+    })
+    ..onPostStream(RegExp(r'/images/create'), (_) => Stream.value(utf8.encode('{"status":"Pull complete"}\n')));
 }
 
 Widget _wrap(Transport t, {String? image}) => ProviderScope(
@@ -44,7 +32,7 @@ Widget _wrap(Transport t, {String? image}) => ProviderScope(
 
 void main() {
   testWidgets('empty image blocks create', (tester) async {
-    final t = _FakeTransport();
+    final t = createFake();
     await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Create'));
@@ -54,16 +42,16 @@ void main() {
   });
 
   testWidgets('valid create (start on) posts create then start', (tester) async {
-    final t = _FakeTransport();
+    final t = createFake();
     await tester.pumpWidget(_wrap(t, image: 'nginx'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Create'));
     await tester.pumpAndSettle();
-    expect(t.posts, containsAllInOrder(<String>['/containers/create', '/containers/abc/start']));
+    expect(t.posts.map((p) => p.path), containsAllInOrder(<String>['/containers/create', '/containers/abc/start']));
   });
 
   testWidgets('404 offers to pull, then retries create', (tester) async {
-    final t = _FakeTransport()..createStatus = 404;
+    final t = createFake(createStatus: 404);
     await tester.pumpWidget(_wrap(t, image: 'nginx'));
     await tester.pumpAndSettle();
     await tester.tap(find.widgetWithText(FilledButton, 'Create'));
@@ -73,6 +61,6 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Pull'));
     await tester.pumpAndSettle();
     // create was attempted twice (404 then 201)
-    expect(t.posts.where((p) => p == '/containers/create').length, 2);
+    expect(t.posts.where((p) => p.path == '/containers/create').length, 2);
   });
 }
