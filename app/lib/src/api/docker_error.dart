@@ -30,7 +30,7 @@ class DockerError implements Exception {
       404 => DockerErrorKind.notFound,
       409 => DockerErrorKind.conflict,
       400 => DockerErrorKind.badRequest,
-      >= 500 => DockerErrorKind.server,
+      >= 500 && < 600 => DockerErrorKind.server,
       _ => DockerErrorKind.unknown,
     };
     return DockerError(kind, _messageFrom(body) ?? _label(kind, statusCode), statusCode: statusCode);
@@ -56,11 +56,16 @@ class DockerError implements Exception {
     }
     if (e is TlsException) return DockerError(DockerErrorKind.network, _clip('TLS error: ${e.message}'), cause: e);
     if (e is WebSocketException) {
+      if (e.httpStatusCode != null) {
+        final r = DockerError.fromResponse(e.httpStatusCode!, '');
+        return DockerError(r.kind, 'WebSocket upgrade rejected: ${r.message}', statusCode: e.httpStatusCode, cause: e);
+      }
       return DockerError(DockerErrorKind.network, _clip('WebSocket error: ${e.message}'), cause: e);
     }
     if (e is HttpException) return DockerError(DockerErrorKind.network, _clip(e.message), cause: e);
     if (e is ClientException) return DockerError(DockerErrorKind.network, _clip(e.message), cause: e);
     if (e is WebSocketChannelException) {
+      if (e.inner != null) return DockerError.fromException(e.inner!);
       return DockerError(DockerErrorKind.network, _clip(e.message ?? 'WebSocket connection failed'), cause: e);
     }
     if (e is IOException) return DockerError(DockerErrorKind.network, _clip(e.toString()), cause: e);

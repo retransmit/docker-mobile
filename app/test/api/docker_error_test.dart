@@ -16,6 +16,8 @@ void main() {
       expect(DockerError.fromResponse(400, '').kind, DockerErrorKind.badRequest);
       expect(DockerError.fromResponse(500, '').kind, DockerErrorKind.server);
       expect(DockerError.fromResponse(503, '').kind, DockerErrorKind.server);
+      expect(DockerError.fromResponse(599, '').kind, DockerErrorKind.server);
+      expect(DockerError.fromResponse(600, '').kind, DockerErrorKind.unknown);
       expect(DockerError.fromResponse(418, '').kind, DockerErrorKind.unknown);
       expect(DockerError.fromResponse(404, '').statusCode, 404);
     });
@@ -92,6 +94,37 @@ void main() {
       expect(w.retryable, isTrue);
     });
 
+    test('a wrapped websocket upgrade rejection maps through the status table', () {
+      final unauthorized =
+          DockerError.fromException(WebSocketChannelException.from(const WebSocketException('not upgraded', 401)));
+      expect(unauthorized.kind, DockerErrorKind.unauthorized);
+      expect(unauthorized.statusCode, 401);
+      expect(unauthorized.retryable, isFalse);
+      expect(unauthorized.message, contains('Unauthorized'));
+      final notFound =
+          DockerError.fromException(WebSocketChannelException.from(const WebSocketException('not upgraded', 404)));
+      expect(notFound.kind, DockerErrorKind.notFound);
+      expect(notFound.statusCode, 404);
+      final server =
+          DockerError.fromException(WebSocketChannelException.from(const WebSocketException('not upgraded', 503)));
+      expect(server.kind, DockerErrorKind.server);
+      expect(server.retryable, isTrue);
+    });
+
+    test('a wrapped socket failure stays network', () {
+      final e = DockerError.fromException(WebSocketChannelException.from(const SocketException('refused')));
+      expect(e.kind, DockerErrorKind.network);
+      expect(e.retryable, isTrue);
+      expect(e.message, contains('Cannot reach the daemon'));
+    });
+
+    test('an inner-less channel exception is network with its message', () {
+      final e = DockerError.fromException(WebSocketChannelException('connect failed'));
+      expect(e.kind, DockerErrorKind.network);
+      expect(e.message, 'connect failed');
+      expect(DockerError.fromException(WebSocketChannelException()).message, 'WebSocket connection failed');
+    });
+
     test('tls handshake message includes the OS detail when present', () {
       final withDetail = DockerError.fromException(const HandshakeException(
           'Handshake error in client', OSError('CERTIFICATE_VERIFY_FAILED: self signed certificate', 1)));
@@ -101,9 +134,9 @@ void main() {
     });
 
     test('every mapped message is clipped', () {
-      expect(DockerError.fromException(SocketException('x' * 500)).message.length, lessThanOrEqualTo(203));
       final long = 'x' * 500;
       for (final e in <Object>[
+        SocketException(long),
         HandshakeException('h', OSError(long)),
         HandshakeException(long),
         TlsException(long),
@@ -112,7 +145,9 @@ void main() {
         ClientException(long),
         WebSocketChannelException(long),
       ]) {
-        expect(DockerError.fromException(e).message.length, lessThanOrEqualTo(203), reason: '${e.runtimeType}');
+        final message = DockerError.fromException(e).message;
+        expect(message, hasLength(203), reason: '${e.runtimeType}');
+        expect(message, endsWith('...'), reason: '${e.runtimeType}');
       }
     });
   });
