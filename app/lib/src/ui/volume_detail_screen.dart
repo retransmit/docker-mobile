@@ -15,7 +15,7 @@ class VolumeDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(volumeName)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(volumeDetailProvider(volumeName))),
+        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(volumeDetailProvider(volumeName)), busy: detail.isRefreshing),
         data: (v) {
           final client = ref.read(dockerClientProvider);
           return ListView(

@@ -60,7 +60,7 @@ class SystemScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: dash.when(
           loading: () => const SkeletonCards(key: ValueKey('loading')),
-          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(systemDashboardProvider)),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(systemDashboardProvider), busy: dash.isRefreshing),
           data: (d) {
           final info = d.info;
           final v = d.version;

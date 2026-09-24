@@ -118,4 +118,30 @@ void main() {
     expect(find.byType(ErrorView), findsOneWidget);
     expect(find.byIcon(Icons.wifi_off), findsOneWidget);
   });
+
+  testWidgets('Retry shows progress while the refetch is pending', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return Completer<List<DockerContainer>>().future;
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.tap(find.text('Retry'));
+    // The indicator animates forever, so pump one frame rather than settling.
+    await tester.pump();
+    expect(calls, 2);
+    expect(
+      find.descendant(of: find.byType(ErrorView), matching: find.byType(CircularProgressIndicator)),
+      findsOneWidget,
+    );
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+  });
 }

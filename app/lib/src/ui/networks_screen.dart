@@ -40,7 +40,7 @@ class NetworksScreen extends ConsumerWidget {
                 await ref.read(networksProvider.future);
               } catch (_) {}
             },
-            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(networksProvider)),
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(networksProvider), busy: networks.isRefreshing),
           ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),

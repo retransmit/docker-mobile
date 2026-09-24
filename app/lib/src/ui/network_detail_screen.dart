@@ -16,7 +16,7 @@ class NetworkDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(title)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(networkDetailProvider(networkId))),
+        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(networkDetailProvider(networkId)), busy: detail.isRefreshing),
         data: (d) {
           final client = ref.read(dockerClientProvider);
           return ListView(

@@ -44,7 +44,7 @@ class ContainersScreen extends ConsumerWidget {
                 await ref.read(containersProvider.future);
               } catch (_) {}
             },
-            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(containersProvider)),
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(containersProvider), busy: containers.isRefreshing),
           ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),

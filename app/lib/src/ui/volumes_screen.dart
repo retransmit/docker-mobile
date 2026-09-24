@@ -40,7 +40,7 @@ class VolumesScreen extends ConsumerWidget {
                 await ref.read(volumesProvider.future);
               } catch (_) {}
             },
-            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(volumesProvider)),
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(volumesProvider), busy: volumes.isRefreshing),
           ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),

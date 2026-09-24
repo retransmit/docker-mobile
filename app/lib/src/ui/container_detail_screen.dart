@@ -43,7 +43,7 @@ class ContainerDetailScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: detail.when(
           loading: () => const SkeletonCards(key: ValueKey('loading')),
-          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(containerDetailProvider(containerId))),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(containerDetailProvider(containerId)), busy: detail.isRefreshing),
           data: (c) => KeyedSubtree(
             key: const ValueKey('data'),
             child: _Body(detail: c, containerId: containerId, containerName: containerName, onRun: _run),

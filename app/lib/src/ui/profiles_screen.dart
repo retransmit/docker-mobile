@@ -42,7 +42,7 @@ class ProfilesScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: profiles.when(
           loading: () => const SkeletonList(key: ValueKey('loading')),
-          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(profilesProvider)),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(profilesProvider), busy: profiles.isRefreshing),
           data: (list) => KeyedSubtree(
             key: const ValueKey('data'),
             child: list.isEmpty

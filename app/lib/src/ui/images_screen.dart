@@ -47,7 +47,7 @@ class ImagesScreen extends ConsumerWidget {
                 await ref.read(imagesProvider.future);
               } catch (_) {}
             },
-            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(imagesProvider)),
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(imagesProvider), busy: images.isRefreshing),
           ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),

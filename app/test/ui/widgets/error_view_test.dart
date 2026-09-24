@@ -98,4 +98,22 @@ void main() {
     await tester.tap(find.text('Retry'));
     expect(tapped, 1);
   });
+
+  testWidgets('busy disables Retry and shows a progress indicator', (tester) async {
+    await tester.pumpWidget(_wrap(ErrorView(
+      error: const DockerError(DockerErrorKind.server, 'boom'),
+      onRetry: () {},
+      busy: true,
+    )));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+
+    await tester.pumpWidget(_wrap(ErrorView(
+      error: const DockerError(DockerErrorKind.server, 'boom'),
+      onRetry: () {},
+    )));
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNotNull);
+  });
 }

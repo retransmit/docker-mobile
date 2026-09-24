@@ -13,7 +13,11 @@ class ErrorView extends StatelessWidget {
   final Widget? secondary;
   final bool scrollable;
 
-  const ErrorView({super.key, required this.error, this.onRetry, this.secondary, this.scrollable = false});
+  /// When true the Retry button is disabled and shows a progress indicator,
+  /// for the window between tapping Retry and the new result arriving.
+  final bool busy;
+
+  const ErrorView({super.key, required this.error, this.onRetry, this.secondary, this.scrollable = false, this.busy = false});
 
   static IconData iconFor(DockerErrorKind kind) => switch (kind) {
         DockerErrorKind.network => Icons.wifi_off,
@@ -61,8 +65,10 @@ class ErrorView extends StatelessWidget {
             if (onRetry != null) ...[
               const SizedBox(height: 16),
               FilledButton.tonalIcon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh),
+                onPressed: busy ? null : onRetry,
+                icon: busy
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.refresh),
                 label: const Text('Retry'),
               ),
             ],
