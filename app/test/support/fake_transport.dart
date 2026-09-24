@@ -76,6 +76,7 @@ class FakeTransport implements Transport {
 
   /// Every GET stream yields [stream]; buffered GETs answer `{}` 200 so an
   /// inspect-before-stream call succeeds.
+  /// The same Stream instance is handed to every stream() call, so pass a broadcast or multi-subscription stream if the code under test subscribes more than once.
   factory FakeTransport.streaming(Stream<List<int>> stream) => FakeTransport()
     ..onGet(RegExp('.*'), (_) => http.Response('{}', 200))
     ..onStream(RegExp('.*'), (_) => stream);
@@ -94,7 +95,7 @@ class FakeTransport implements Transport {
   /// The matching call throws [error] (buffered) or emits it (streams).
   void throwOn(String method, Pattern path, Object error) => _rules.add(_Rule(method, path, error: error));
 
-  /// The matching buffered call never completes (for timeout tests).
+  /// The matching buffered call never completes; a matching stream never emits (for timeout tests).
   void hangOn(String method, Pattern path) => _rules.add(_Rule(method, path, hang: true));
 
   RecordedCall? get lastCall => calls.isEmpty ? null : calls.last;
@@ -128,6 +129,7 @@ class FakeTransport implements Transport {
     calls.add(call);
     final rule = _find(method, path);
     if (rule == null) return const Stream.empty();
+    if (rule.hang) return StreamController<List<int>>().stream;
     if (rule.error != null) return Stream.error(rule.error!);
     return rule.stream!(call);
   }

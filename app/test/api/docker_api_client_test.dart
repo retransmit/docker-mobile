@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_api_client.dart';
@@ -109,5 +112,83 @@ void main() {
           .having((e) => e.statusCode, 'statusCode', 404)
           .having((e) => e.message, 'message', 'No such container: web')),
     );
+  });
+
+  test('paths are prefixed with the negotiated version', () async {
+    final t = FakeTransport.always(http.Response('[]', 200));
+    await DockerApiClient(t, apiVersion: '1.45').listContainers();
+    expect(t.lastPath, '/v1.45/containers/json');
+    expect(t.lastQuery, {'all': 'true'});
+  });
+
+  test('prefix normalises a leading v and whitespace', () async {
+    final t = FakeTransport.always(http.Response('[]', 200));
+    await DockerApiClient(t, apiVersion: ' v1.45 ').listContainers();
+    expect(t.lastPath, '/v1.45/containers/json');
+  });
+
+  test('no prefix when apiVersion is null', () async {
+    final t = FakeTransport.always(http.Response('[]', 200));
+    await DockerApiClient(t).listContainers();
+    expect(t.lastPath, '/containers/json');
+  });
+
+  test('ping and version are never prefixed', () async {
+    final t = FakeTransport()
+      ..onGet('/_ping', (_) => http.Response('OK', 200))
+      ..onGet('/version', (_) => http.Response('{"Version":"27.0","ApiVersion":"1.46"}', 200));
+    final client = DockerApiClient(t, apiVersion: '1.45');
+    await client.ping();
+    expect(t.lastPath, '/_ping');
+    final v = await client.getVersion();
+    expect(v.apiVersion, '1.46');
+    expect(t.lastPath, '/version');
+  });
+
+  test('ping throws DockerError on non-200', () async {
+    final t = FakeTransport()..onGet('/_ping', (_) => http.Response('nope', 500));
+    expect(DockerApiClient(t).ping(),
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.server)));
+  });
+
+  test('a hung request times out with DockerError.timeout', () {
+    fakeAsync((async) {
+      final t = FakeTransport()..hangOn('GET', '/containers/json');
+      final client = DockerApiClient(t, requestTimeout: const Duration(seconds: 5));
+      Object? error;
+      client.listContainers().then((_) {}, onError: (Object e) { error = e; });
+      async.elapse(const Duration(seconds: 4));
+      expect(error, isNull);
+      async.elapse(const Duration(seconds: 2));
+      expect(error, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  test('requestTimeout null disables the timeout', () {
+    fakeAsync((async) {
+      final t = FakeTransport()..hangOn('GET', '/containers/json');
+      final client = DockerApiClient(t, requestTimeout: null);
+      Object? error;
+      client.listContainers().then((_) {}, onError: (Object e) { error = e; });
+      async.elapse(const Duration(minutes: 5));
+      expect(error, isNull);
+    });
+  });
+
+  test('transport exceptions are wrapped for buffered calls and streams', () async {
+    final t = FakeTransport()
+      ..throwOn('GET', RegExp('.*'), const SocketException('refused'))
+      ..throwOn('STREAM', '/events', const SocketException('gone'));
+    final client = DockerApiClient(t);
+    expect(client.listContainers(),
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+    expect(client.streamEvents().first,
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('streams are prefixed too', () async {
+    final t = FakeTransport()..onStream(RegExp('.*'), (_) => const Stream.empty());
+    await DockerApiClient(t, apiVersion: '1.45').streamEvents().toList();
+    expect(t.lastPath, '/v1.45/events');
   });
 }

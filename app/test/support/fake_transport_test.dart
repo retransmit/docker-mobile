@@ -39,6 +39,17 @@ void main() {
     expect(done, isFalse);
   });
 
+  test('hangOn for a stream never emits and never closes', () async {
+    final t = FakeTransport()..hangOn('STREAM', '/logs');
+    var events = 0;
+    var done = false;
+    final sub = t.stream('/logs').listen((_) => events++, onDone: () => done = true);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(events, 0);
+    expect(done, isFalse);
+    await sub.cancel();
+  });
+
   test('execAttach hands out FakeExecChannels and close is recorded', () async {
     final t = FakeTransport();
     final ch = await t.execAttach('e1', cols: 80, rows: 24) as FakeExecChannel;
