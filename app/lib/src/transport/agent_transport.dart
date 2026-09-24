@@ -18,12 +18,15 @@ class AgentTransport implements Transport {
   final http.Client Function() _streamClientFactory;
   final Duration streamHeaderTimeout;
 
+  /// Socket connect budget for the HTTP clients and the exec WebSocket.
+  final Duration connectTimeout;
+
   AgentTransport({
     required this.baseUri,
     required this.token,
     http.Client? client,
     http.Client Function()? streamClientFactory,
-    Duration connectTimeout = kConnectTimeout,
+    this.connectTimeout = kConnectTimeout,
     this.streamHeaderTimeout = kStreamHeaderTimeout,
   })  : _client = client ?? _ioClient(connectTimeout),
         _streamClientFactory = streamClientFactory ?? (() => _ioClient(connectTimeout));
@@ -127,7 +130,11 @@ class AgentTransport implements Transport {
       path: '/exec/$execId/ws',
       queryParameters: {'w': '$cols', 'h': '$rows'},
     );
-    final channel = IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $token'});
+    final channel = IOWebSocketChannel.connect(
+      uri,
+      headers: {'Authorization': 'Bearer $token'},
+      connectTimeout: connectTimeout,
+    );
     await channel.ready;
     return _WebSocketExecChannel(channel);
   }

@@ -141,4 +141,16 @@ void main() {
       emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
     );
   });
+
+  test('a body stream error surfaces as DockerError.network', () async {
+    final t = AgentTransport(
+      baseUri: Uri.parse('http://h:1'),
+      token: 't',
+      streamClientFactory: () => _SpyClient(Stream.error(const SocketException('reset'))),
+    );
+    await expectLater(
+      t.stream('/x'),
+      emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
+    );
+  });
 }
