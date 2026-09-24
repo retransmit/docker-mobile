@@ -32,7 +32,7 @@ class DockerApiClient {
   /// Negotiated Engine API version such as "1.45"; null means unversioned paths.
   final String? apiVersion;
 
-  /// Applied to every buffered call; null disables it.
+  /// Applied to every buffered call unless the call passes its own budget; null disables the default.
   final Duration? requestTimeout;
 
   const DockerApiClient(this.transport, {this.apiVersion, this.requestTimeout = kRequestTimeout});
@@ -44,28 +44,28 @@ class DockerApiClient {
     return n.isEmpty ? path : '/v$n$path';
   }
 
-  /// Buffered calls time out after [requestTimeout] unless the caller opts out
-  /// with [noTimeout] for a call the daemon may legitimately hold open.
-  Future<http.Response> _guard(Future<http.Response> Function() call, {bool noTimeout = false}) async {
+  /// Buffered calls time out after [timeout] when the call passes one (the
+  /// long-running calls pass [kLongRequestTimeout]), else after [requestTimeout].
+  Future<http.Response> _guard(Future<http.Response> Function() call, {Duration? timeout}) async {
     try {
       final f = call();
-      final t = requestTimeout;
-      return await (!noTimeout && t != null ? f.timeout(t) : f);
+      final t = timeout ?? requestTimeout;
+      return await (t != null ? f.timeout(t) : f);
     } catch (e, st) {
       Error.throwWithStackTrace(DockerError.wrap(e), st);
     }
   }
 
-  Future<http.Response> _get(String path, {Map<String, String>? query, bool noTimeout = false}) =>
-      _guard(() => transport.get(_p(path), query: query), noTimeout: noTimeout);
+  Future<http.Response> _get(String path, {Map<String, String>? query, Duration? timeout}) =>
+      _guard(() => transport.get(_p(path), query: query), timeout: timeout);
 
   Future<http.Response> _post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers, bool noTimeout = false}) =>
+          {Map<String, String>? query, Object? body, Map<String, String>? headers, Duration? timeout}) =>
       _guard(() => transport.post(_p(path), query: query, body: body, headers: headers),
-          noTimeout: noTimeout);
+          timeout: timeout);
 
-  Future<http.Response> _delete(String path, {Map<String, String>? query, bool noTimeout = false}) =>
-      _guard(() => transport.delete(_p(path), query: query), noTimeout: noTimeout);
+  Future<http.Response> _delete(String path, {Map<String, String>? query, Duration? timeout}) =>
+      _guard(() => transport.delete(_p(path), query: query), timeout: timeout);
 
   Stream<List<int>> _stream(String path, {Map<String, String>? query}) =>
       _wrapErrors(() => transport.stream(_p(path), query: query));
@@ -206,13 +206,13 @@ class DockerApiClient {
   Future<void> startContainer(String id) async =>
       _ensure(await _post('/containers/$id/start'), ok: const {204, 304});
 
-  /// No timeout: the daemon holds this open until the container exits.
+  /// Long budget: the daemon holds this open until the container exits.
   Future<void> stopContainer(String id) async =>
-      _ensure(await _post('/containers/$id/stop', noTimeout: true), ok: const {204, 304});
+      _ensure(await _post('/containers/$id/stop', timeout: kLongRequestTimeout), ok: const {204, 304});
 
-  /// No timeout: the daemon holds this open until the container exits and restarts.
+  /// Long budget: the daemon holds this open until the container exits and restarts.
   Future<void> restartContainer(String id) async =>
-      _ensure(await _post('/containers/$id/restart', noTimeout: true));
+      _ensure(await _post('/containers/$id/restart', timeout: kLongRequestTimeout));
 
   Future<void> pauseContainer(String id) async =>
       _ensure(await _post('/containers/$id/pause'));
@@ -226,8 +226,10 @@ class DockerApiClient {
   Future<void> renameContainer(String id, String newName) async =>
       _ensure(await _post('/containers/$id/rename', query: {'name': newName}));
 
-  Future<void> removeContainer(String id, {bool force = false, bool removeVolumes = false}) async =>
-      _ensure(await _delete('/containers/$id', query: {'force': '$force', 'v': '$removeVolumes'}));
+  /// Long budget: removing data can take a while on large hosts.
+  Future<void> removeContainer(String id, {bool force = false, bool removeVolumes = false}) async => _ensure(
+      await _delete('/containers/$id',
+          query: {'force': '$force', 'v': '$removeVolumes'}, timeout: kLongRequestTimeout));
 
   Future<List<DockerImage>> listImages() async {
     final resp = await _get('/images/json');
@@ -280,17 +282,18 @@ class DockerApiClient {
   Future<void> tagImage(String id, {required String repo, String tag = 'latest'}) async =>
       _ensure(await _post('/images/$id/tag', query: {'repo': repo, 'tag': tag}), ok: const {201});
 
-  /// No timeout: removing an image and its layers can run for minutes on large hosts.
+  /// Long budget: removing an image and its layers can run for minutes on large hosts.
   Future<void> removeImage(String id, {bool force = false, bool noprune = false}) async => _ensure(
-        await _delete('/images/$id', query: {'force': '$force', 'noprune': '$noprune'}, noTimeout: true),
+        await _delete('/images/$id',
+            query: {'force': '$force', 'noprune': '$noprune'}, timeout: kLongRequestTimeout),
         ok: const {200},
       );
 
-  /// No timeout: prune calls can run for minutes on large hosts.
+  /// Long budget: prune calls can run for minutes on large hosts.
   Future<void> pruneImages({bool danglingOnly = true}) async => _ensure(
         await _post('/images/prune',
             query: {'filters': jsonEncode({'dangling': [danglingOnly ? 'true' : 'false']})},
-            noTimeout: true),
+            timeout: kLongRequestTimeout),
         ok: const {200},
       );
 
@@ -346,9 +349,9 @@ class DockerApiClient {
   Future<void> removeNetwork(String id) async =>
       _ensure(await _delete('/networks/$id'), ok: const {204});
 
-  /// No timeout: prune calls can run for minutes on large hosts.
+  /// Long budget: prune calls can run for minutes on large hosts.
   Future<void> pruneNetworks() async =>
-      _ensure(await _post('/networks/prune', noTimeout: true), ok: const {200});
+      _ensure(await _post('/networks/prune', timeout: kLongRequestTimeout), ok: const {200});
 
   Future<List<DockerVolume>> listVolumes() async {
     final resp = await _get('/volumes');
@@ -377,12 +380,14 @@ class DockerApiClient {
     return DockerVolume.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
-  Future<void> removeVolume(String name, {bool force = false}) async =>
-      _ensure(await _delete('/volumes/$name', query: {'force': '$force'}), ok: const {204});
+  /// Long budget: removing data can take a while on large hosts.
+  Future<void> removeVolume(String name, {bool force = false}) async => _ensure(
+      await _delete('/volumes/$name', query: {'force': '$force'}, timeout: kLongRequestTimeout),
+      ok: const {204});
 
-  /// No timeout: prune calls can run for minutes on large hosts.
+  /// Long budget: prune calls can run for minutes on large hosts.
   Future<void> pruneVolumes() async =>
-      _ensure(await _post('/volumes/prune', noTimeout: true), ok: const {200});
+      _ensure(await _post('/volumes/prune', timeout: kLongRequestTimeout), ok: const {200});
 
   Future<SystemInfo> getInfo() async {
     final resp = await _get('/info');
@@ -396,21 +401,21 @@ class DockerApiClient {
     return VersionInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
-  /// No timeout: disk-usage calls can run for minutes on large hosts.
+  /// Long budget: disk-usage calls can run for minutes on large hosts.
   Future<DiskUsage> getDiskUsage() async {
-    final resp = await _get('/system/df', noTimeout: true);
+    final resp = await _get('/system/df', timeout: kLongRequestTimeout);
     if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     final decoded = await _decodeJson(resp.body) as Map<String, dynamic>;
     return DiskUsage.fromJson(decoded);
   }
 
-  /// No timeout: prune calls can run for minutes on large hosts.
+  /// Long budget: prune calls can run for minutes on large hosts.
   Future<void> pruneContainers() async =>
-      _ensure(await _post('/containers/prune', noTimeout: true), ok: const {200});
+      _ensure(await _post('/containers/prune', timeout: kLongRequestTimeout), ok: const {200});
 
-  /// No timeout: prune calls can run for minutes on large hosts.
+  /// Long budget: prune calls can run for minutes on large hosts.
   Future<void> pruneBuildCache() async =>
-      _ensure(await _post('/build/prune', noTimeout: true), ok: const {200});
+      _ensure(await _post('/build/prune', timeout: kLongRequestTimeout), ok: const {200});
 
   Future<void> systemPrune({bool allImages = false, bool includeVolumes = false}) async {
     await pruneContainers();

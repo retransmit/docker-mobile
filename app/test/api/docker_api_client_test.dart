@@ -194,7 +194,7 @@ void main() {
     expect(t.lastPath, '/v1.45/events');
   });
 
-  test('no-timeout calls wait as long as the daemon takes', () {
+  test('long-running calls get the long budget', () {
     fakeAsync((async) {
       final t = FakeTransport()..hangOn('POST', '/containers/c1/stop');
       final client = DockerApiClient(t);
@@ -202,8 +202,40 @@ void main() {
       client.stopContainer('c1').then((_) {}, onError: (Object e) { error = e; });
       async.elapse(const Duration(minutes: 5));
       expect(error, isNull);
-      expect(async.pendingTimers, isEmpty);
+      async.elapse(const Duration(minutes: 6));
+      expect(error, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
     });
+  });
+
+  test('every long-running call outlives the default budget but not the long one', () {
+    final calls = <String, Future<void> Function(DockerApiClient)>{
+      'stopContainer': (c) => c.stopContainer('c1'),
+      'restartContainer': (c) => c.restartContainer('c1'),
+      'removeContainer': (c) => c.removeContainer('c1'),
+      'pruneContainers': (c) => c.pruneContainers(),
+      'removeImage': (c) => c.removeImage('i1'),
+      'pruneImages': (c) => c.pruneImages(),
+      'pruneNetworks': (c) => c.pruneNetworks(),
+      'removeVolume': (c) => c.removeVolume('v1'),
+      'pruneVolumes': (c) => c.pruneVolumes(),
+      'pruneBuildCache': (c) => c.pruneBuildCache(),
+      'getDiskUsage': (c) => c.getDiskUsage(),
+    };
+    for (final entry in calls.entries) {
+      fakeAsync((async) {
+        final t = FakeTransport()
+          ..hangOn('GET', RegExp('.*'))
+          ..hangOn('POST', RegExp('.*'))
+          ..hangOn('DELETE', RegExp('.*'));
+        final client = DockerApiClient(t, requestTimeout: const Duration(seconds: 5));
+        Object? error;
+        entry.value(client).then((_) {}, onError: (Object e) { error = e; });
+        async.elapse(const Duration(minutes: 9));
+        expect(error, isNull, reason: entry.key);
+        async.elapse(const Duration(minutes: 2));
+        expect(error, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout), reason: entry.key);
+      });
+    }
   });
 
   test('default budget still applies to a call without the escape hatch', () {

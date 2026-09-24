@@ -95,8 +95,10 @@ final systemDashboardProvider =
     FutureProvider<({SystemInfo info, VersionInfo version, DiskUsage df})>((ref) async {
   final client = ref.watch(dockerClientProvider);
   if (client == null) throw StateError('Not connected');
-  // Future.wait so all three are awaited even if one rejects first - avoids
-  // orphaned futures surfacing as unhandled zone errors on the error path.
-  final results = await Future.wait([client.getInfo(), client.getVersion(), client.getDiskUsage()]);
+  // eagerError so the first failure (typically a timeout) surfaces immediately
+  // instead of waiting on the slowest call; Future.wait still attaches handlers
+  // to every future, so later errors are not unhandled.
+  final results =
+      await Future.wait([client.getInfo(), client.getVersion(), client.getDiskUsage()], eagerError: true);
   return (info: results[0] as SystemInfo, version: results[1] as VersionInfo, df: results[2] as DiskUsage);
 });
