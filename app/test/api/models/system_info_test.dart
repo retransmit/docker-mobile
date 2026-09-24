@@ -53,4 +53,11 @@ void main() {
     expect(df.total, 0);
     expect(df.images.count, 0);
   });
+
+  test('VersionInfo reads MinAPIVersion and defaults it to empty', () {
+    final v = VersionInfo.fromJson({'Version': '27.0.1', 'ApiVersion': '1.46', 'MinAPIVersion': '1.24'});
+    expect(v.apiVersion, '1.46');
+    expect(v.minApiVersion, '1.24');
+    expect(VersionInfo.fromJson({'ApiVersion': '1.46'}).minApiVersion, '');
+  });
 }
