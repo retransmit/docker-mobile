@@ -49,7 +49,7 @@ void main() {
     expect(t.calls.where((c) => c.method == 'DELETE').map((c) => c.path), contains('/networks/n1'));
 
     final t2 = FakeTransport.always(http.Response('', 403));
-    expect(() => DockerApiClient(t2).removeNetwork('bridge'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t2).removeNetwork('bridge'), throwsA(isA<DockerError>()));
   });
 
   test('pruneNetworks posts to /networks/prune', () async {

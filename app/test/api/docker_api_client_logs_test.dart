@@ -24,7 +24,7 @@ void main() {
 
   test('inspectContainer throws on non-200', () async {
     final t = FakeTransport.always(http.Response('no', 404));
-    expect(() => DockerApiClient(t).inspectContainer('a'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).inspectContainer('a'), throwsA(isA<DockerError>()));
   });
 
   test('streamContainerLogs demuxes non-TTY frames and builds query', () async {

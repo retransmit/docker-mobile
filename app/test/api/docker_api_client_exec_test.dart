@@ -34,6 +34,6 @@ void main() {
   test('createExec throws on non-201', () async {
     final t = FakeTransport.always(http.Response('boom', 500));
     expect(() => DockerApiClient(t).createExec('c1', cmd: ['sh']),
-        throwsA(isA<DockerApiException>()));
+        throwsA(isA<DockerError>()));
   });
 }

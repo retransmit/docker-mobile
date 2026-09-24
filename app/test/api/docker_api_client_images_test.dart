@@ -55,6 +55,6 @@ void main() {
 
   test('tagImage throws on non-201', () async {
     final t = FakeTransport.always(http.Response('', 409));
-    expect(() => DockerApiClient(t).tagImage('a', repo: 'r'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).tagImage('a', repo: 'r'), throwsA(isA<DockerError>()));
   });
 }

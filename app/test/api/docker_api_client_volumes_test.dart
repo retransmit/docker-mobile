@@ -33,9 +33,9 @@ void main() {
     expect(t.calls.last.query, {'force': 'true'});
   });
 
-  test('a 409 on remove throws DockerApiException', () async {
+  test('a 409 on remove throws DockerError', () async {
     final t = FakeTransport.always(http.Response('', 409));
-    expect(() => DockerApiClient(t).removeVolume('data'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).removeVolume('data'), throwsA(isA<DockerError>()));
   });
 
   test('pruneVolumes posts to /volumes/prune', () async {

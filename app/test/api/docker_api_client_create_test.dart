@@ -28,7 +28,7 @@ void main() {
       ..onPost('/containers/create', (_) => http.Response('{"message":"No such image: nginx"}', 404));
     expect(
       () => DockerApiClient(t2).createContainer(const ContainerCreateConfig(image: 'nginx')),
-      throwsA(isA<DockerApiException>()),
+      throwsA(isA<DockerError>()),
     );
   });
 }

@@ -47,18 +47,18 @@ void main() {
     expect(t.calls.last.query, {'force': 'true', 'v': 'true'});
   });
 
-  test('a 409 on remove throws DockerApiException', () async {
+  test('a 409 on remove throws DockerError', () async {
     final t = FakeTransport.always(http.Response('', 409));
-    expect(() => DockerApiClient(t).removeContainer('a'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).removeContainer('a'), throwsA(isA<DockerError>()));
   });
 
-  test('a 500 on start throws DockerApiException', () async {
+  test('a 500 on start throws DockerError', () async {
     final t = FakeTransport.always(http.Response('', 500));
-    expect(() => DockerApiClient(t).startContainer('a'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).startContainer('a'), throwsA(isA<DockerError>()));
   });
 
   test('304 is rejected for non-start/stop actions (start/stop-only no-op)', () async {
     final t = FakeTransport.always(http.Response('', 304));
-    expect(() => DockerApiClient(t).restartContainer('a'), throwsA(isA<DockerApiException>()));
+    expect(() => DockerApiClient(t).restartContainer('a'), throwsA(isA<DockerError>()));
   });
 }

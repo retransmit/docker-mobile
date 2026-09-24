@@ -41,7 +41,7 @@ void main() {
       ProviderScope(
         overrides: [
           containersProvider.overrideWith(
-            (ref) async => throw const DockerApiException(401, 'unauthorized'),
+            (ref) async => throw DockerError.fromResponse(401, 'unauthorized'),
           ),
         ],
         child: const MaterialApp(home: ContainersScreen()),

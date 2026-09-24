@@ -21,12 +21,12 @@ void main() {
     expect(containers.first.image, 'nginx');
   });
 
-  test('listContainers throws DockerApiException on non-200', () async {
+  test('listContainers throws DockerError on non-200', () async {
     final t = FakeTransport.always(http.Response('boom', 500));
     final client = DockerApiClient(t);
     expect(
       () => client.listContainers(),
-      throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
+      throwsA(isA<DockerError>().having((e) => e.statusCode, 'statusCode', 500)),
     );
   });
 
@@ -63,12 +63,12 @@ void main() {
     expect(images.last.size, 1999);
   });
 
-  test('listImages throws DockerApiException on non-200', () async {
+  test('listImages throws DockerError on non-200', () async {
     final t = FakeTransport.always(http.Response('boom', 500));
     final client = DockerApiClient(t);
     expect(
       () => client.listImages(),
-      throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
+      throwsA(isA<DockerError>().having((e) => e.statusCode, 'statusCode', 500)),
     );
   });
 
@@ -90,12 +90,24 @@ void main() {
     expect(df.total, 128);
   });
 
-  test('getDiskUsage throws DockerApiException on non-200', () async {
+  test('getDiskUsage throws DockerError on non-200', () async {
     final t = FakeTransport.always(http.Response('boom', 500));
     final client = DockerApiClient(t);
     expect(
       () => client.getDiskUsage(),
-      throwsA(isA<DockerApiException>().having((e) => e.statusCode, 'statusCode', 500)),
+      throwsA(isA<DockerError>().having((e) => e.statusCode, 'statusCode', 500)),
+    );
+  });
+
+  test('non-200 becomes a DockerError with the parsed daemon message', () async {
+    final t = FakeTransport.always(http.Response('{"message":"No such container: web"}', 404));
+    final client = DockerApiClient(t);
+    await expectLater(
+      client.inspectContainer('web'),
+      throwsA(isA<DockerError>()
+          .having((e) => e.kind, 'kind', DockerErrorKind.notFound)
+          .having((e) => e.statusCode, 'statusCode', 404)
+          .having((e) => e.message, 'message', 'No such container: web')),
     );
   });
 }

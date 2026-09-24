@@ -87,8 +87,8 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
       String id;
       try {
         id = await client.createContainer(config, name: name.isEmpty ? null : name);
-      } on DockerApiException catch (e) {
-        if (e.statusCode != 404 && !e.body.contains('No such image')) rethrow;
+      } on DockerError catch (e) {
+        if (e.statusCode != 404 && !e.message.contains('No such image')) rethrow;
         if (!mounted) return;
         final pull = await _confirmPull(image);
         if (pull != true) {

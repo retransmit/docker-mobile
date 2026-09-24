@@ -18,15 +18,9 @@ import 'models/image_detail.dart';
 import 'models/pull_event.dart';
 import 'models/system_info.dart';
 import 'stdcopy.dart';
+import 'docker_error.dart';
 
-class DockerApiException implements Exception {
-  final int statusCode;
-  final String body;
-  const DockerApiException(this.statusCode, this.body);
-
-  @override
-  String toString() => 'DockerApiException($statusCode): $body';
-}
+export 'docker_error.dart';
 
 /// The single Docker Engine API client used across all transports.
 class DockerApiClient {
@@ -47,7 +41,7 @@ class DockerApiClient {
   Future<List<DockerContainer>> listContainers({bool all = true}) async {
     final resp = await transport.get('/containers/json', query: {'all': all.toString()});
     if (resp.statusCode != 200) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
     final decoded = jsonDecode(resp.body) as List<dynamic>;
     return decoded
@@ -58,7 +52,7 @@ class DockerApiClient {
   Future<ContainerInspect> inspectContainer(String id) async {
     final resp = await transport.get('/containers/$id/json');
     if (resp.statusCode != 200) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
     return ContainerInspect.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
@@ -94,7 +88,7 @@ class DockerApiClient {
       'Cmd': cmd,
     });
     if (resp.statusCode != 201) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
     return (jsonDecode(resp.body) as Map<String, dynamic>)['Id'] as String;
   }
@@ -105,28 +99,28 @@ class DockerApiClient {
   Future<void> resizeExec(String execId, {required int cols, required int rows}) async {
     final resp = await transport.post('/exec/$execId/resize', query: {'h': '$rows', 'w': '$cols'});
     if (resp.statusCode != 200 && resp.statusCode != 201) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
   }
 
   Future<ExecInspect> inspectExec(String execId) async {
     final resp = await transport.get('/exec/$execId/json');
     if (resp.statusCode != 200) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
     return ExecInspect.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
   void _ensure(http.Response resp, {Set<int> ok = const {204}}) {
     if (!ok.contains(resp.statusCode)) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
   }
 
   Future<ContainerDetail> inspectContainerDetail(String id) async {
     final resp = await transport.get('/containers/$id/json');
     if (resp.statusCode != 200) {
-      throw DockerApiException(resp.statusCode, resp.body);
+      throw DockerError.fromResponse(resp.statusCode, resp.body);
     }
     return ContainerDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
@@ -137,7 +131,7 @@ class DockerApiClient {
       query: (name == null || name.isEmpty) ? null : {'name': name},
       body: config.toJson(),
     );
-    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 201) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return (jsonDecode(resp.body) as Map<String, dynamic>)['Id'] as String;
   }
 
@@ -167,20 +161,20 @@ class DockerApiClient {
 
   Future<List<DockerImage>> listImages() async {
     final resp = await transport.get('/images/json');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     final decoded = await _decodeJson(resp.body) as List;
     return decoded.map((e) => DockerImage.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<ImageDetail> inspectImage(String id) async {
     final resp = await transport.get('/images/$id/json');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return ImageDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
   Future<List<ImageHistoryLayer>> imageHistory(String id) async {
     final resp = await transport.get('/images/$id/history');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return (jsonDecode(resp.body) as List).map((e) => ImageHistoryLayer.fromJson(e as Map<String, dynamic>)).toList();
   }
 
@@ -227,13 +221,13 @@ class DockerApiClient {
 
   Future<List<DockerNetwork>> listNetworks() async {
     final resp = await transport.get('/networks');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return (jsonDecode(resp.body) as List).map((e) => DockerNetwork.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<NetworkDetail> inspectNetwork(String id) async {
     final resp = await transport.get('/networks/$id');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return NetworkDetail.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
@@ -270,7 +264,7 @@ class DockerApiClient {
     if (options.isNotEmpty) body['Options'] = options;
 
     final resp = await transport.post('/networks/create', body: body);
-    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 201) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return (jsonDecode(resp.body) as Map<String, dynamic>)['Id'] as String;
   }
 
@@ -282,14 +276,14 @@ class DockerApiClient {
 
   Future<List<DockerVolume>> listVolumes() async {
     final resp = await transport.get('/volumes');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     final list = (jsonDecode(resp.body) as Map<String, dynamic>)['Volumes'] as List? ?? const [];
     return list.map((e) => DockerVolume.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<DockerVolume> inspectVolume(String name) async {
     final resp = await transport.get('/volumes/$name');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return DockerVolume.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
@@ -303,7 +297,7 @@ class DockerApiClient {
     if (labels.isNotEmpty) body['Labels'] = labels;
     if (driverOpts.isNotEmpty) body['DriverOpts'] = driverOpts;
     final resp = await transport.post('/volumes/create', body: body);
-    if (resp.statusCode != 201) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 201) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return DockerVolume.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
@@ -315,19 +309,19 @@ class DockerApiClient {
 
   Future<SystemInfo> getInfo() async {
     final resp = await transport.get('/info');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return SystemInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
   Future<VersionInfo> getVersion() async {
     final resp = await transport.get('/version');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     return VersionInfo.fromJson(jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
   Future<DiskUsage> getDiskUsage() async {
     final resp = await transport.get('/system/df');
-    if (resp.statusCode != 200) throw DockerApiException(resp.statusCode, resp.body);
+    if (resp.statusCode != 200) throw DockerError.fromResponse(resp.statusCode, resp.body);
     final decoded = await _decodeJson(resp.body) as Map<String, dynamic>;
     return DiskUsage.fromJson(decoded);
   }
