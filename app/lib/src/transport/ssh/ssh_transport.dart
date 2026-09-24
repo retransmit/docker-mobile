@@ -22,13 +22,15 @@ class SshTransport implements Transport {
   final Future<Duplex> Function() _openDuplex;
   final Future<void> Function()? _onClose;
 
-  /// Budget for the response headers of a GET stream or an exec upgrade;
-  /// stream bodies never time out. Buffered calls are bounded by the API client.
+  /// Budget for opening the channel and reading the response headers of a GET
+  /// stream or an exec upgrade; stream bodies never time out. Buffered calls
+  /// are bounded by the API client.
   final Duration headerTimeout;
 
-  /// Budget for the response headers of a POST stream. dockerd sends the
-  /// headers of `POST /images/create` only with the first progress line,
-  /// after the registry handshake, so a pull gets the long budget.
+  /// Budget for opening the channel and reading the response headers of a
+  /// POST stream. dockerd sends the headers of `POST /images/create` only with
+  /// the first progress line, after the registry handshake, so a pull gets the
+  /// long budget.
   final Duration postStreamHeaderTimeout;
 
   SshTransport({
@@ -78,6 +80,39 @@ class SshTransport implements Transport {
           {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
       _send('POST', path, query: query, body: body, headers: headers);
 
+  /// Opens a dial-stdio channel, writes one request and reads the response
+  /// head, all under a single [budget]: on a half-open SSH connection the
+  /// channel open itself stalls, so the deadline must start before it.
+  /// [onOpen] hands the channel over as soon as it exists so the caller can
+  /// close it on failure or cancel. A channel that only opens after the
+  /// deadline is closed here and never used.
+  Future<StreamHttpResponse> _openAndSend(
+    Duration budget,
+    void Function(Duplex conn) onOpen, {
+    required String method,
+    required String path,
+    Map<String, String>? headers,
+    List<int>? body,
+  }) {
+    var timedOut = false;
+    Future<StreamHttpResponse> attempt() async {
+      final conn = await _openDuplex();
+      if (timedOut) {
+        await conn.close();
+        // The caller already failed with the timeout; this error goes nowhere.
+        throw TimeoutException('SSH channel opened after the deadline', budget);
+      }
+      onOpen(conn);
+      writeHttpRequest(conn.add, method: method, path: path, headers: headers, body: body);
+      return readHttpResponse(conn.input);
+    }
+
+    return attempt().timeout(budget, onTimeout: () {
+      timedOut = true;
+      throw TimeoutException('No response from the daemon within $budget', budget);
+    });
+  }
+
   Stream<List<int>> _openStream(String method, String path, Duration headerBudget,
       {Map<String, String>? query, Object? body}) {
     final controller = StreamController<List<int>>();
@@ -85,16 +120,14 @@ class SshTransport implements Transport {
     var cancelled = false;
     controller.onListen = () async {
       try {
-        conn = await _openDuplex();
         final h = <String, String>{};
         List<int>? bodyBytes;
         if (body != null) {
           bodyBytes = utf8.encode(body is String ? body : jsonEncode(body));
           h['Content-Type'] = 'application/json';
         }
-        writeHttpRequest(conn!.add,
+        final resp = await _openAndSend(headerBudget, (c) => conn = c,
             method: method, path: _pathWithQuery(path, query), headers: h.isEmpty ? null : h, body: bodyBytes);
-        final resp = await readHttpResponse(conn!.input).timeout(headerBudget);
         if (resp.statusCode != 200) {
           final b = await resp.body.expand((c) => c).toList();
           controller.addError(DockerError.fromResponse(resp.statusCode, utf8.decode(b, allowMalformed: true)));
@@ -152,30 +185,26 @@ class SshTransport implements Transport {
 
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
-    final Duplex conn;
+    Duplex? conn;
     try {
-      conn = await _openDuplex();
-    } catch (e, st) {
-      Error.throwWithStackTrace(DockerError.wrap(e), st);
-    }
-    try {
-      writeHttpRequest(
-        conn.add,
+      final resp = await _openAndSend(
+        headerTimeout,
+        (c) => conn = c,
         method: 'POST',
         path: '/exec/$execId/start',
         headers: {'Connection': 'Upgrade', 'Upgrade': 'tcp', 'Content-Type': 'application/json'},
         body: utf8.encode(jsonEncode({'Detach': false, 'Tty': true})),
       );
-      final resp = await readHttpResponse(conn.input).timeout(headerTimeout);
       // A successful hijack is 101 (Upgrade) or a 2xx; anything >=400 is an
       // error body, not a duplex - surface it instead of returning a dead channel.
       if (resp.statusCode >= 400) {
         final body = await resp.body.expand((c) => c).toList();
         throw DockerError.fromResponse(resp.statusCode, utf8.decode(body, allowMalformed: true));
       }
-      return SocketExecChannel(input: resp.body, onSend: conn.add, onClose: conn.close);
+      final open = conn!;
+      return SocketExecChannel(input: resp.body, onSend: open.add, onClose: open.close);
     } catch (e, st) {
-      await conn.close(); // never leak the dial-stdio channel on a failed upgrade
+      await conn?.close(); // never leak the dial-stdio channel on a failed upgrade
       Error.throwWithStackTrace(DockerError.wrap(e), st);
     }
   }

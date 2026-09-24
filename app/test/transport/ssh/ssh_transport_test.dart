@@ -110,6 +110,44 @@ void main() {
     });
   });
 
+  test('stream times out when the channel never opens', () {
+    fakeAsync((async) {
+      final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  test('a channel that opens after the deadline is closed without sending the request', () {
+    fakeAsync((async) {
+      final opening = Completer<Duplex>();
+      final t = SshTransport(openDuplex: () => opening.future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+      var closed = false;
+      final written = <int>[];
+      opening.complete(Duplex(
+          input: StreamController<List<int>>().stream, add: written.addAll, close: () async => closed = true));
+      async.flushMicrotasks();
+      expect(closed, isTrue, reason: 'nobody will read the late channel, so it must not leak');
+      expect(written, isEmpty);
+    });
+  });
+
+  test('execAttach times out when the channel never opens', () {
+    fakeAsync((async) {
+      final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.execAttach('e1', cols: 80, rows: 24).then((_) {}, onError: (Object e) { err = e; });
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
   test('a failed dial surfaces as DockerError.network', () async {
     final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
     expect(t.get('/x'), throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
