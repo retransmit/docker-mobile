@@ -49,6 +49,7 @@ class SystemInfo {
 class VersionInfo {
   final String version;
   final String apiVersion;
+  final String minApiVersion;
   final String goVersion;
   final String os;
   final String arch;
@@ -56,6 +57,7 @@ class VersionInfo {
   const VersionInfo({
     required this.version,
     required this.apiVersion,
+    this.minApiVersion = '',
     required this.goVersion,
     required this.os,
     required this.arch,
@@ -64,6 +66,7 @@ class VersionInfo {
   factory VersionInfo.fromJson(Map<String, dynamic> json) => VersionInfo(
         version: json['Version'] as String? ?? '',
         apiVersion: json['ApiVersion'] as String? ?? '',
+        minApiVersion: json['MinAPIVersion'] as String? ?? '',
         goVersion: json['GoVersion'] as String? ?? '',
         os: json['Os'] as String? ?? '',
         arch: json['Arch'] as String? ?? '',

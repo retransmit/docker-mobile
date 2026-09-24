@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/events_notifier.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 
 class EventsScreen extends ConsumerWidget {
@@ -55,7 +56,7 @@ class EventsScreen extends ConsumerWidget {
           ),
           Expanded(
             child: state.status == EventsStatus.error
-                ? Center(child: Text('Error: ${state.error}'))
+                ? ErrorView(error: state.error ?? 'Event stream failed', onRetry: () => ref.invalidate(eventsProvider))
                 : visible.isEmpty
                     ? const EmptyState(
                         icon: Icons.bolt,

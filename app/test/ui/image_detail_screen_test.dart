@@ -2,41 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/api/docker_error.dart';
+import 'package:docker_mobile/src/api/models/image_detail.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/image_detail_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 
-class _FakeTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  final List<String> deletes = [];
-  final List<String> posts = [];
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async {
-    if (path.endsWith('/history')) {
-      return http.Response('[{"Id":"l1","Created":0,"CreatedBy":"RUN apt-get","Size":10,"Tags":[]}]', 200);
-    }
-    return http.Response('{"Id":"sha256:abc","RepoTags":["nginx:latest"],"Architecture":"amd64","Os":"linux","Size":100,"Created":"2026-01-02T03:04:05Z","Config":{"Env":[],"ExposedPorts":{"80/tcp":{}}}}', 200);
-  }
-  @override
-  Future<http.Response> post(String path,
-      {Map<String, String>? query, Object? body, Map<String, String>? headers}) async {
-    posts.add(path);
-    return http.Response('', 201);
-  }
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) async {
-    deletes.add(path);
-    return http.Response('', 200);
-  }
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
-      throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) => const Stream.empty();
-}
+import '../support/fake_transport.dart';
+
+FakeTransport imageFake() => FakeTransport()
+  ..onGet('/images/sha256:abc/json', (_) => http.Response(
+        '{"Id":"sha256:abc","RepoTags":["nginx:latest"],"Architecture":"amd64","Os":"linux","Size":100,"Created":"2026-01-02T03:04:05Z","Config":{"Env":[],"ExposedPorts":{"80/tcp":{}}}}',
+        200,
+      ))
+  ..onGet('/images/sha256:abc/history',
+      (_) => http.Response('[{"Id":"l1","Created":0,"CreatedBy":"RUN apt-get","Size":10,"Tags":[]}]', 200))
+  ..onPost('/images/sha256:abc/tag', (_) => http.Response('', 201))
+  ..onDelete('/images/sha256:abc', (_) => http.Response('', 200));
 
 /// Pushes ImageDetailScreen onto a base route so the screen's own Navigator.pop works.
 Future<void> _open(WidgetTester tester, Transport t) async {
@@ -62,7 +45,7 @@ Future<void> _open(WidgetTester tester, Transport t) async {
 
 void main() {
   testWidgets('renders inspect + history and offers Remove', (tester) async {
-    await _open(tester, _FakeTransport());
+    await _open(tester, imageFake());
 
     expect(find.text('nginx:latest'), findsOneWidget); // app bar title
     expect(find.textContaining('amd64'), findsWidgets);
@@ -75,7 +58,7 @@ void main() {
   });
 
   testWidgets('confirming Remove deletes the image and pops back', (tester) async {
-    final t = _FakeTransport();
+    final t = imageFake();
     await _open(tester, t);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Remove'));
@@ -83,12 +66,12 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Remove')); // dialog confirm
     await tester.pumpAndSettle();
 
-    expect(t.deletes, contains('/images/sha256:abc'));
+    expect(t.calls.where((c) => c.method == 'DELETE').map((c) => c.path), contains('/images/sha256:abc'));
     expect(find.text('open'), findsOneWidget); // popped back to the base route
   });
 
   testWidgets('Tag dialog tags the image', (tester) async {
-    final t = _FakeTransport();
+    final t = imageFake();
     await _open(tester, t);
 
     await tester.tap(find.widgetWithText(OutlinedButton, 'Tag'));
@@ -99,6 +82,44 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Tag')); // dialog confirm
     await tester.pumpAndSettle();
 
-    expect(t.posts, contains('/images/sha256:abc/tag'));
+    expect(t.posts.map((c) => c.path), contains('/images/sha256:abc/tag'));
+  });
+
+  testWidgets('Retry reloads the history as well as the details', (tester) async {
+    var detailCalls = 0;
+    var historyCalls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        imageDetailProvider.overrideWith((ref, id) async {
+          detailCalls++;
+          if (detailCalls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return const ImageDetail(
+            id: 'sha256:abc',
+            repoTags: ['nginx:latest'],
+            architecture: 'amd64',
+            os: 'linux',
+            size: 100,
+            created: '2026-01-02T03:04:05Z',
+            env: [],
+            exposedPorts: [],
+          );
+        }),
+        imageHistoryProvider.overrideWith((ref, id) async {
+          historyCalls++;
+          if (historyCalls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return const [ImageHistoryLayer(id: 'l1', created: 0, createdBy: 'RUN apt-get', size: 10, tags: [])];
+        }),
+      ],
+      child: const MaterialApp(home: ImageDetailScreen(imageId: 'sha256:abc', title: 'nginx:latest')),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget);
+
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+
+    expect(detailCalls, 2);
+    expect(historyCalls, 2);
+    expect(find.textContaining('RUN apt-get'), findsWidgets);
   });
 }

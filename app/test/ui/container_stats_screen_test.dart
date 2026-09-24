@@ -2,32 +2,15 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'package:fl_chart/fl_chart.dart';
+import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_stats_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
-class _FakeTransport implements Transport {
-  final List<int>? statsBytes;
-  _FakeTransport({this.statsBytes});
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
-      statsBytes == null ? const Stream.empty() : Stream.value(statsBytes!);
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{}', 200);
-  @override
-  Future<http.Response> post(String path, {Map<String, String>? query, Object? body, Map<String, String>? headers}) async => http.Response('', 200);
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) async => http.Response('', 204);
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) => throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) => const Stream.empty();
-  @override
-  Future<void> close() async {}
-}
+import '../support/fake_transport.dart';
 
 const _sample =
     '{"cpu_stats":{"cpu_usage":{"total_usage":2000000000},"system_cpu_usage":10000000000,"online_cpus":4},'
@@ -43,13 +26,14 @@ Widget _wrap(Transport t) => ProviderScope(
 
 void main() {
   testWidgets('shows a skeleton before the first sample', (tester) async {
-    await tester.pumpWidget(_wrap(_FakeTransport()));
+    await tester.pumpWidget(_wrap(FakeTransport()));
     await tester.pump(const Duration(milliseconds: 50));
     expect(find.byType(SkeletonCards), findsOneWidget);
   });
 
   testWidgets('renders CPU%, memory and I/O from a sample', (tester) async {
-    await tester.pumpWidget(_wrap(_FakeTransport(statsBytes: utf8.encode('$_sample\n'))));
+    await tester.pumpWidget(_wrap(
+        FakeTransport()..onStream('/containers/abc/stats', (_) => Stream.value(utf8.encode('$_sample\n')))));
     await tester.pumpAndSettle();
     expect(find.textContaining('40.0'), findsWidgets); // CPU %
     expect(find.textContaining('CPU'), findsWidgets);
@@ -78,5 +62,15 @@ void main() {
     expect(find.text('2.0 KB'), findsOneWidget);
     expect(find.text('4.0 KB'), findsOneWidget);
     expect(find.text('8.0 KB'), findsOneWidget);
+  });
+
+  testWidgets('a failing stats stream renders an ErrorView with Retry', (tester) async {
+    await tester.pumpWidget(_wrap(FakeTransport()
+      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(500, '{"message":"boom"}')))));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('boom'), findsOneWidget);
+    expect(find.text('Retry'), findsOneWidget);
   });
 }

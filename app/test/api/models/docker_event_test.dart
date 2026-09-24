@@ -27,4 +27,17 @@ void main() {
     expect(e2.target, '');
     expect(e2.time, isNull);
   });
+
+  test('carries the actor id and raw timeNano', () {
+    final e = DockerEvent.fromJson({
+      'Type': 'container', 'Action': 'start',
+      'Actor': {'ID': 'abcdef1234567890', 'Attributes': {'name': 'web'}},
+      'time': 1700000000, 'timeNano': 1700000000000000123,
+    });
+    expect(e.actorId, 'abcdef1234567890');
+    expect(e.timeNano, 1700000000000000123);
+    expect(e.target, 'web');
+    expect(DockerEvent.fromJson({'Type': 'image', 'Action': 'pull'}).actorId, '');
+    expect(DockerEvent.fromJson({'Type': 'image', 'Action': 'pull'}).timeNano, isNull);
+  });
 }

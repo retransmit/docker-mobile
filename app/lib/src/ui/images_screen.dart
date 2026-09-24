@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/providers.dart';
 import 'image_detail_screen.dart';
 import 'pull_sheet.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 
@@ -38,12 +39,23 @@ class ImagesScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: images.when(
           loading: () => const SkeletonList(key: ValueKey('loading')),
-          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          error: (e, _) => RefreshIndicator(
+            key: const ValueKey('error'),
+            onRefresh: () async {
+              try {
+                ref.invalidate(imagesProvider);
+                await ref.read(imagesProvider.future);
+              } catch (_) {}
+            },
+            child: ErrorView(error: e, scrollable: true, onRetry: () => ref.invalidate(imagesProvider), busy: images.isRefreshing),
+          ),
           data: (list) => RefreshIndicator(
             key: const ValueKey('data'),
             onRefresh: () async {
-              ref.invalidate(imagesProvider);
-              await ref.read(imagesProvider.future);
+              try {
+                ref.invalidate(imagesProvider);
+                await ref.read(imagesProvider.future);
+              } catch (_) {}
             },
             child: list.isEmpty
                 ? ListView(

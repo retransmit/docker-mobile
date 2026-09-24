@@ -57,3 +57,7 @@ Thumbs.db
 
 # === Logs ===
 *.log
+
+# === Local ===
+docs/
+graphify-out/

@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dartssh2/dartssh2.dart';
 
+import '../../api/docker_error.dart';
 import '../../storage/credential_store.dart';
+import '../timeouts.dart';
 import 'stream_http.dart';
 
 /// A raw bidirectional byte stream to the remote dockerd socket.
@@ -78,36 +81,95 @@ abstract class SshConnection {
 
 String _stripSha256Prefix(String fp) => fp.startsWith('SHA256:') ? fp.substring(7) : fp;
 
+/// Opens the TCP socket to an SSH server, giving up after `timeout`.
+typedef SshSocketConnector = Future<SSHSocket> Function(String host, int port, Duration timeout);
+
+Future<SSHSocket> _defaultConnector(String host, int port, Duration timeout) =>
+    SSHSocket.connect(host, port, timeout: timeout);
+
+/// A private key that fails to parse or decrypt: not retryable until the user
+/// fixes the key or passphrase.
+DockerError _unreadableKey(Object cause) => DockerError(
+    DockerErrorKind.unauthorized, 'SSH private key could not be read - check the key and passphrase',
+    cause: cause);
+
+/// Maps SSH-layer failures to [DockerError]. Public for tests.
+DockerError mapSshError(Object e) {
+  if (e is DockerError) return e;
+  if (e is TimeoutException) return DockerError(DockerErrorKind.timeout, 'SSH connection timed out', cause: e);
+  if (e is SSHAuthFailError) return DockerError(DockerErrorKind.unauthorized, 'SSH authentication failed', cause: e);
+  if (e is SSHAuthAbortError) return DockerError(DockerErrorKind.network, 'SSH connection aborted during authentication', cause: e);
+  // Fallback for any other SSHAuthError implementer.
+  if (e is SSHAuthError) return DockerError(DockerErrorKind.unauthorized, 'SSH authentication failed', cause: e);
+  // dartssh2 2.18 surfaces a rejected host key as an SSHAuthAbortError (above);
+  // the launcher's verifier flag is the source of truth for a mismatch.
+  if (e is SSHHostkeyError) return DockerError(DockerErrorKind.unauthorized, 'SSH host key rejected', cause: e);
+  // Also covers SSHKeyDecryptError (a wrong or missing passphrase), which extends it.
+  if (e is SSHKeyDecodeError) return _unreadableKey(e);
+  if (e is SSHError) return DockerError(DockerErrorKind.network, 'SSH error: $e', cause: e);
+  return DockerError.fromException(e);
+}
+
 class RealSshConnection implements SshConnection {
   final SshCredentials creds;
+  final SshSocketConnector _connector;
+  final Duration _connectTimeout;
   SSHClient? _client;
-  RealSshConnection(this.creds);
+
+  RealSshConnection(this.creds, {SshSocketConnector? connector, Duration connectTimeout = kConnectTimeout})
+      : _connector = connector ?? _defaultConnector,
+        // ignore: prefer_initializing_formals
+        _connectTimeout = connectTimeout;
 
   @override
   Future<void> connect({required HostKeyVerifier verifyHostKey}) async {
-    final socket = await SSHSocket.connect(creds.host, creds.port);
-    final client = SSHClient(
-      socket,
-      username: creds.username,
-      onPasswordRequest:
-          creds.authMethod == SshAuthMethod.password ? () => creds.password ?? '' : null,
-      identities: creds.authMethod == SshAuthMethod.key && creds.privateKeyPem != null
-          ? SSHKeyPair.fromPem(creds.privateKeyPem!, creds.passphrase)
-          : null,
-      // dartssh2 hands a precomputed utf8('SHA256:'+base64NoPad(sha256(hostkey)));
-      // stripping the prefix yields exactly fingerprintSha256()'s output.
-      onVerifyHostKey: (type, fingerprint) =>
-          verifyHostKey(_stripSha256Prefix(String.fromCharCodes(fingerprint))),
-    );
+    final SSHSocket socket;
+    try {
+      socket = await _connector(creds.host, creds.port, _connectTimeout).timeout(_connectTimeout);
+    } catch (e) {
+      throw mapSshError(e);
+    }
+    final SSHClient client;
+    try {
+      client = SSHClient(
+        socket,
+        username: creds.username,
+        onPasswordRequest:
+            creds.authMethod == SshAuthMethod.password ? () => creds.password ?? '' : null,
+        identities: creds.authMethod == SshAuthMethod.key && creds.privateKeyPem != null
+            ? SSHKeyPair.fromPem(creds.privateKeyPem!, creds.passphrase)
+            : null,
+        // dartssh2 hands a precomputed utf8('SHA256:'+base64NoPad(sha256(hostkey)));
+        // stripping the prefix yields exactly fingerprintSha256()'s output.
+        onVerifyHostKey: (type, fingerprint) =>
+            verifyHostKey(_stripSha256Prefix(String.fromCharCodes(fingerprint))),
+      );
+    } catch (e, st) {
+      // A bad key or passphrase throws here (SSHKeyPair.fromPem): release the
+      // already-connected socket rather than leak it. Text that is not PEM at
+      // all fails as a FormatException, which is the same unreadable key; a
+      // key type dartssh2 cannot parse (a PKCS#8 `BEGIN PRIVATE KEY`, say)
+      // fails as an UnsupportedError.
+      socket.destroy();
+      Error.throwWithStackTrace(
+        switch (e) {
+          FormatException() => _unreadableKey(e),
+          UnsupportedError() => DockerError(DockerErrorKind.unauthorized,
+              'SSH private key type is not supported - use an OpenSSH or PEM RSA/EC key', cause: e),
+          _ => mapSshError(e),
+        },
+        st,
+      );
+    }
     _client = client;
     try {
-      await client.authenticated; // forces handshake + host-key callback + auth
-    } catch (_) {
+      await client.authenticated.timeout(_connectTimeout); // handshake + host-key callback + auth
+    } catch (e) {
       // Auth / host-key-mismatch / post-handshake failure: reclaim the socket
       // rather than leaving a live client (and a channel to a suspicious host).
       client.close();
       _client = null;
-      rethrow;
+      throw mapSshError(e);
     }
   }
 

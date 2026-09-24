@@ -3,64 +3,17 @@ import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:http/http.dart' as http;
-import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/api/stdcopy.dart';
 import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/state/logs_notifier.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 
-/// Returns a fresh single-subscription stream of [chunks] on every call,
-/// so re-subscribing (follow/tail/timestamps changes) works.
-class _FakeTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  final List<List<int>> chunks;
-  _FakeTransport(this.chunks);
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{}', 200);
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => Stream.fromIterable(chunks);
-  @override
-  Future<http.Response> post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
-      throw UnimplementedError();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
-      throw UnimplementedError();
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) =>
-      throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
-      const Stream.empty();
-}
+import '../support/fake_transport.dart';
 
-/// Streams whatever is pushed into [controller], so tests can drive bytes,
-/// errors, and pause/cancel timing explicitly.
-class _ControllerTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  final StreamController<List<int>> controller;
-  _ControllerTransport(this.controller);
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response('{}', 200);
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => controller.stream;
-  @override
-  Future<http.Response> post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) =>
-      throw UnimplementedError();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
-      throw UnimplementedError();
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) =>
-      throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) =>
-      const Stream.empty();
-}
+/// Streams [chunks] afresh on every subscription (Stream.fromIterable is
+/// multi-listen), so re-subscribing (follow/tail/timestamps changes) works.
+FakeTransport chunksFake(List<List<int>> chunks) =>
+    FakeTransport.streaming(Stream.fromIterable(chunks));
 
 List<int> frame(int type, List<int> payload) {
   final n = payload.length;
@@ -69,7 +22,7 @@ List<int> frame(int type, List<int> payload) {
 
 void main() {
   test('assembles lines across chunk boundaries', () async {
-    final client = DockerApiClient(_FakeTransport([
+    final client = DockerApiClient(chunksFake([
       frame(1, utf8.encode('hel')),
       frame(1, utf8.encode('lo\nwor')),
       frame(1, utf8.encode('ld\n')),
@@ -81,7 +34,7 @@ void main() {
   });
 
   test('tags stderr lines', () async {
-    final client = DockerApiClient(_FakeTransport([frame(2, utf8.encode('boom\n'))]));
+    final client = DockerApiClient(chunksFake([frame(2, utf8.encode('boom\n'))]));
     final n = LogsNotifier(client, 'a', false);
     await pumpEventQueue();
     expect(n.state.lines.single.source, LogStream.stderr);
@@ -89,7 +42,7 @@ void main() {
   });
 
   test('search filters visible lines', () async {
-    final client = DockerApiClient(_FakeTransport([frame(1, utf8.encode('apple\nbanana\n'))]));
+    final client = DockerApiClient(chunksFake([frame(1, utf8.encode('apple\nbanana\n'))]));
     final n = LogsNotifier(client, 'a', false);
     await pumpEventQueue();
     n.setSearch('ban');
@@ -99,7 +52,7 @@ void main() {
 
   test('caps the buffer at kLogBufferCap lines', () async {
     final many = '${List.generate(kLogBufferCap + 10, (i) => 'line$i').join('\n')}\n';
-    final client = DockerApiClient(_FakeTransport([frame(1, utf8.encode(many))]));
+    final client = DockerApiClient(chunksFake([frame(1, utf8.encode(many))]));
     final n = LogsNotifier(client, 'a', false);
     await pumpEventQueue();
     expect(n.state.lines.length, kLogBufferCap);
@@ -108,7 +61,7 @@ void main() {
   });
 
   test('reaches idle status when a non-following stream completes', () async {
-    final client = DockerApiClient(_FakeTransport([frame(1, utf8.encode('x\n'))]));
+    final client = DockerApiClient(chunksFake([frame(1, utf8.encode('x\n'))]));
     final n = LogsNotifier(client, 'a', false);
     await pumpEventQueue();
     expect(n.state.status, LogsStatus.idle);
@@ -117,7 +70,7 @@ void main() {
 
   test('pause stops the live stream and preserves buffered lines', () async {
     final controller = StreamController<List<int>>();
-    final client = DockerApiClient(_ControllerTransport(controller));
+    final client = DockerApiClient(FakeTransport.streaming(controller.stream));
     final n = LogsNotifier(client, 'a', false);
 
     controller.add(frame(1, utf8.encode('one\n')));
@@ -140,7 +93,7 @@ void main() {
 
   test('enters error status and preserves lines on stream error', () async {
     final controller = StreamController<List<int>>();
-    final client = DockerApiClient(_ControllerTransport(controller));
+    final client = DockerApiClient(FakeTransport.streaming(controller.stream));
     final n = LogsNotifier(client, 'a', false);
 
     controller.add(frame(1, utf8.encode('before\n')));
@@ -159,7 +112,7 @@ void main() {
   test('logsProvider is autoDispose: notifier is disposed when the last listener leaves', () async {
     final controller = StreamController<List<int>>();
     final container = ProviderContainer(overrides: [
-      dockerClientProvider.overrideWith((ref) => DockerApiClient(_ControllerTransport(controller))),
+      dockerClientProvider.overrideWith((ref) => DockerApiClient(FakeTransport.streaming(controller.stream))),
     ]);
     addTearDown(container.dispose);
 
@@ -184,7 +137,7 @@ void main() {
 
   test('parses the leading RFC3339 timestamp when timestamps enabled', () async {
     final line = '2026-01-02T03:04:05.000000000Z hello\n';
-    final client = DockerApiClient(_FakeTransport([frame(1, utf8.encode(line))]));
+    final client = DockerApiClient(chunksFake([frame(1, utf8.encode(line))]));
     final n = LogsNotifier(client, 'a', false);
     n.setTimestamps(true); // re-subscribes with timestamps on
     await pumpEventQueue();

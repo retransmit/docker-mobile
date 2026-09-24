@@ -6,34 +6,14 @@ import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/volume_detail_screen.dart';
 
-class _FakeTransport implements Transport {
-  @override
-  Future<void> close() async {}
-  final List<String> deletes = [];
-  final List<Map<String, String>?> deleteQueries = [];
-  @override
-  Future<http.Response> get(String path, {Map<String, String>? query}) async => http.Response(
+import '../support/fake_transport.dart';
+
+FakeTransport volumeFake() => FakeTransport()
+  ..onGet('/volumes/data', (_) => http.Response(
         '{"Name":"data","Driver":"local","Mountpoint":"/var/lib/docker/volumes/data/_data","Scope":"local","Labels":{"env":"prod"}}',
         200,
-      );
-  @override
-  Future<http.Response> post(String path,
-          {Map<String, String>? query, Object? body, Map<String, String>? headers}) async =>
-      http.Response('', 200);
-  @override
-  Future<http.Response> delete(String path, {Map<String, String>? query}) async {
-    deletes.add(path);
-    deleteQueries.add(query);
-    return http.Response('', 204);
-  }
-  @override
-  Stream<List<int>> stream(String path, {Map<String, String>? query}) => const Stream.empty();
-  @override
-  Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) =>
-      throw UnimplementedError();
-  @override
-  Stream<List<int>> postStream(String path, {Map<String, String>? query, Object? body}) => const Stream.empty();
-}
+      ))
+  ..onDelete('/volumes/data', (_) => http.Response('', 204));
 
 Future<void> _open(WidgetTester tester, Transport t) async {
   await tester.pumpWidget(ProviderScope(
@@ -56,7 +36,7 @@ Future<void> _open(WidgetTester tester, Transport t) async {
 
 void main() {
   testWidgets('renders detail and removes', (tester) async {
-    final t = _FakeTransport();
+    final t = volumeFake();
     await _open(tester, t);
 
     expect(find.text('data'), findsOneWidget); // app bar title
@@ -67,12 +47,12 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Remove')); // confirm
     await tester.pumpAndSettle();
 
-    expect(t.deletes, contains('/volumes/data'));
+    expect(t.calls.where((c) => c.method == 'DELETE').map((c) => c.path), contains('/volumes/data'));
     expect(find.text('open'), findsOneWidget); // popped back
   });
 
   testWidgets('the Force switch sends force=true', (tester) async {
-    final t = _FakeTransport();
+    final t = volumeFake();
     await _open(tester, t);
 
     await tester.tap(find.widgetWithText(ElevatedButton, 'Remove'));
@@ -82,6 +62,6 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Remove')); // confirm
     await tester.pumpAndSettle();
 
-    expect(t.deleteQueries.last, {'force': 'true'});
+    expect(t.calls.lastWhere((c) => c.method == 'DELETE').query, {'force': 'true'});
   });
 }

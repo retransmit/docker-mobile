@@ -1,7 +1,3 @@
-import 'dart:convert';
-
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-
 class TlsCredentials {
   final String host;
   final int port;
@@ -91,67 +87,4 @@ class SshCredentials {
         passphrase: json['passphrase'] as String?,
         pinnedHostKey: json['pinnedHostKey'] as String?,
       );
-}
-
-abstract class CredentialStore {
-  Future<void> saveTls(TlsCredentials creds);
-  Future<TlsCredentials?> loadTls();
-  Future<void> clearTls();
-  Future<void> saveSsh(SshCredentials creds);
-  Future<SshCredentials?> loadSsh();
-  Future<void> clearSsh();
-}
-
-/// In-memory store for tests (no platform channels).
-class InMemoryCredentialStore implements CredentialStore {
-  String? _json;
-  @override
-  Future<void> saveTls(TlsCredentials creds) async => _json = jsonEncode(creds.toJson());
-  @override
-  Future<TlsCredentials?> loadTls() async =>
-      _json == null ? null : TlsCredentials.fromJson(jsonDecode(_json!) as Map<String, dynamic>);
-  @override
-  Future<void> clearTls() async => _json = null;
-
-  String? _sshJson;
-  @override
-  Future<void> saveSsh(SshCredentials creds) async => _sshJson = jsonEncode(creds.toJson());
-  @override
-  Future<SshCredentials?> loadSsh() async =>
-      _sshJson == null ? null : SshCredentials.fromJson(jsonDecode(_sshJson!) as Map<String, dynamic>);
-  @override
-  Future<void> clearSsh() async => _sshJson = null;
-}
-
-/// Keychain/Keystore-backed store for the running app.
-class SecureCredentialStore implements CredentialStore {
-  static const _key = 'tls_last';
-  static const _sshKey = 'ssh_last';
-  final FlutterSecureStorage _storage;
-  SecureCredentialStore([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage();
-
-  @override
-  Future<void> saveTls(TlsCredentials creds) => _storage.write(key: _key, value: jsonEncode(creds.toJson()));
-
-  @override
-  Future<TlsCredentials?> loadTls() async {
-    final v = await _storage.read(key: _key);
-    return v == null ? null : TlsCredentials.fromJson(jsonDecode(v) as Map<String, dynamic>);
-  }
-
-  @override
-  Future<void> clearTls() => _storage.delete(key: _key);
-
-  @override
-  Future<void> saveSsh(SshCredentials creds) => _storage.write(key: _sshKey, value: jsonEncode(creds.toJson()));
-
-  @override
-  Future<SshCredentials?> loadSsh() async {
-    final v = await _storage.read(key: _sshKey);
-    return v == null ? null : SshCredentials.fromJson(jsonDecode(v) as Map<String, dynamic>);
-  }
-
-  @override
-  Future<void> clearSsh() => _storage.delete(key: _sshKey);
 }

@@ -7,6 +7,7 @@ import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/api/models/docker_container.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/containers_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
@@ -41,7 +42,7 @@ void main() {
       ProviderScope(
         overrides: [
           containersProvider.overrideWith(
-            (ref) async => throw const DockerApiException(401, 'unauthorized'),
+            (ref) async => throw DockerError.fromResponse(401, 'unauthorized'),
           ),
         ],
         child: const MaterialApp(home: ContainersScreen()),
@@ -49,7 +50,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Error:'), findsOneWidget);
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('Not authorized'), findsOneWidget);
+    expect(find.text('unauthorized'), findsOneWidget);
     expect(find.byType(ListTile), findsNothing);
   });
 
@@ -71,5 +74,100 @@ void main() {
 
     completer.complete(const []);
     await tester.pumpAndSettle();
+  });
+
+  testWidgets('Retry re-runs the provider and shows data on success', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) throw DockerError.fromResponse(500, '{"message":"boom"}');
+          return const [DockerContainer(id: 'a', names: ['/web'], image: 'nginx', state: 'running', status: 'Up')];
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.text('boom'), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(calls, 2);
+    expect(find.byType(ErrorView), findsNothing);
+    expect(find.text('/web'), findsOneWidget);
+  });
+
+  testWidgets('Retry keeps retrying on repeated failure', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          throw const DockerError(DockerErrorKind.network, 'down');
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(calls, 3);
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.byIcon(Icons.wifi_off), findsOneWidget);
+  });
+
+  testWidgets('Retry shows progress while the refetch is pending', (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) throw const DockerError(DockerErrorKind.network, 'down');
+          return Completer<List<DockerContainer>>().future;
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await tester.tap(find.text('Retry'));
+    // The indicator animates forever, so pump one frame rather than settling.
+    await tester.pump();
+    expect(calls, 2);
+    expect(
+      find.descendant(of: find.byType(ErrorView), matching: find.byType(CircularProgressIndicator)),
+      findsOneWidget,
+    );
+    expect(tester.widget<FilledButton>(find.byType(FilledButton)).onPressed, isNull);
+  });
+
+  testWidgets('a failed pull-to-refresh from the data state shows the error view without an unhandled error',
+      (tester) async {
+    var calls = 0;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        containersProvider.overrideWith((ref) async {
+          calls++;
+          if (calls == 1) {
+            return const [DockerContainer(id: 'a', names: ['/web'], image: 'nginx', state: 'running', status: 'Up')];
+          }
+          throw const DockerError(DockerErrorKind.network, 'down');
+        }),
+      ],
+      child: const MaterialApp(home: ContainersScreen()),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('/web'), findsOneWidget);
+
+    await tester.fling(find.byType(ListView).first, const Offset(0, 300), 1000);
+    await tester.pumpAndSettle();
+
+    expect(calls, 2);
+    expect(tester.takeException(), isNull);
+    expect(find.byType(ErrorView), findsOneWidget);
   });
 }

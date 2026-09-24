@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:docker_mobile/src/transport/transport.dart';
+import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/ssh/ssh_connection.dart';
 import 'package:docker_mobile/src/transport/ssh/ssh_transport.dart';
+import 'package:docker_mobile/src/transport/timeouts.dart';
 
 Duplex _duplex(List<int> response, List<int> written, {void Function()? onClose}) => Duplex(
       input: Stream.value(response),
@@ -60,10 +63,11 @@ void main() {
     await input.close();
   });
 
-  test('stream surfaces a non-200 as TransportException', () async {
+  test('stream surfaces a non-200 as DockerError', () async {
     final t = SshTransport(openDuplex: () async =>
         _duplex(ascii.encode('HTTP/1.1 404 Not Found\r\nContent-Length: 3\r\n\r\nno!'), <int>[]));
-    expect(t.stream('/c/logs').first, throwsA(isA<TransportException>()));
+    expect(t.stream('/c/logs').first,
+        throwsA(isA<DockerError>().having((e) => e.statusCode, 'statusCode', 404)));
   });
 
   test('execAttach hijacks: sends Upgrade + body, output is the raw remainder', () async {
@@ -77,5 +81,157 @@ void main() {
     expect(reqText.contains('Upgrade: tcp'), isTrue);
     expect(reqText.contains('{"Detach":false,"Tty":true}'), isTrue);
     expect(utf8.decode(await ch.output.first), 'shell-output');
+  });
+
+  test('buffered calls are not bounded by the transport', () {
+    fakeAsync((async) {
+      var closed = false;
+      final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async => closed = true);
+      final t = SshTransport(openDuplex: () async => conn, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.get('/x').then((_) {}, onError: (Object e) { err = e; });
+      async.elapse(const Duration(minutes: 5));
+      expect(err, isNull, reason: 'the API client, not the transport, bounds buffered calls');
+      expect(async.pendingTimers, isEmpty);
+      expect(closed, isFalse, reason: 'the call is still pending, so its channel stays open');
+    });
+  });
+
+  test('stream times out when headers never arrive and closes the channel', () {
+    fakeAsync((async) {
+      var closed = false;
+      final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async => closed = true);
+      final t = SshTransport(openDuplex: () async => conn, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+      expect(closed, isTrue);
+    });
+  });
+
+  test('stream times out when the channel never opens', () {
+    fakeAsync((async) {
+      final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  test('a channel that opens after the deadline is closed without sending the request', () {
+    fakeAsync((async) {
+      final opening = Completer<Duplex>();
+      final t = SshTransport(openDuplex: () => opening.future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+      var closed = false;
+      final written = <int>[];
+      opening.complete(Duplex(
+          input: StreamController<List<int>>().stream, add: written.addAll, close: () async => closed = true));
+      async.flushMicrotasks();
+      expect(closed, isTrue, reason: 'nobody will read the late channel, so it must not leak');
+      expect(written, isEmpty);
+    });
+  });
+
+  test('a stream cancelled while its channel opens closes the channel without sending the request', () {
+    fakeAsync((async) {
+      final opening = Completer<Duplex>();
+      final t = SshTransport(openDuplex: () => opening.future);
+      final sub = t.stream('/x').listen((_) {});
+      async.flushMicrotasks();
+      sub.cancel();
+      var requestSent = false;
+      var closed = false;
+      opening.complete(Duplex(
+          input: StreamController<List<int>>().stream,
+          add: (_) => requestSent = true,
+          close: () async => closed = true));
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 3));
+      expect(closed, isTrue, reason: 'nobody will read the late channel, so it must not leak');
+      expect(requestSent, isFalse);
+    });
+  });
+
+  test('a stream cancelled while waiting for headers closes the channel quietly', () {
+    fakeAsync((async) {
+      var closed = false;
+      final input = StreamController<List<int>>();
+      final t = SshTransport(
+        openDuplex: () async => Duplex(
+          input: input.stream,
+          add: (_) {},
+          close: () async {
+            closed = true;
+            // Like a real channel, closing it ends its output, so the pending
+            // head read fails; that failure must not surface as an uncaught error.
+            unawaited(input.close());
+          },
+        ),
+        headerTimeout: const Duration(seconds: 5),
+      );
+      final sub = t.stream('/x').listen((_) {});
+      async.flushMicrotasks();
+      sub.cancel();
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 6)); // past the header budget as well
+      expect(closed, isTrue);
+    });
+  });
+
+  test('execAttach times out when the channel never opens', () {
+    fakeAsync((async) {
+      final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.execAttach('e1', cols: 80, rows: 24).then((_) {}, onError: (Object e) { err = e; });
+      async.elapse(const Duration(seconds: 6));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  test('a failed dial surfaces as DockerError.network', () async {
+    final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
+    expect(t.get('/x'), throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('a failed exec dial surfaces as DockerError.network', () async {
+    final t = SshTransport(openDuplex: () async => throw const SocketException('gone'));
+    expect(t.execAttach('e1', cols: 80, rows: 24),
+        throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)));
+  });
+
+  test('pull headers that arrive after the stream header budget still deliver the body', () {
+    fakeAsync((async) {
+      final input = StreamController<List<int>>();
+      final t = SshTransport(openDuplex: () async => Duplex(input: input.stream, add: (_) {}, close: () async {}));
+      final got = <int>[];
+      Object? err;
+      t.postStream('/images/create').listen(got.addAll, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 31));
+      input.add(ascii.encode('HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello'));
+      async.flushMicrotasks();
+      expect(utf8.decode(got), 'hello');
+      expect(err, isNull);
+    });
+  });
+
+  test('pull headers that never arrive time out after the long budget', () {
+    fakeAsync((async) {
+      var closed = false;
+      final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async => closed = true);
+      final t = SshTransport(openDuplex: () async => conn);
+      Object? err;
+      t.postStream('/images/create').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(kLongRequestTimeout - const Duration(seconds: 1));
+      expect(err, isNull);
+      async.elapse(const Duration(seconds: 2));
+      expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+      expect(closed, isTrue);
+    });
   });
 }

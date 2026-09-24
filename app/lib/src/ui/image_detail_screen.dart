@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 import 'create_container_screen.dart';
+import 'widgets/error_view.dart';
 
 class ImageDetailScreen extends ConsumerWidget {
   final String imageId;
@@ -30,7 +31,14 @@ class ImageDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(title)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => ErrorView(
+          error: e,
+          onRetry: () {
+            ref.invalidate(imageDetailProvider(imageId));
+            ref.invalidate(imageHistoryProvider(imageId));
+          },
+          busy: detail.isRefreshing,
+        ),
         data: (d) => ListView(
           padding: const EdgeInsets.all(16),
           children: [

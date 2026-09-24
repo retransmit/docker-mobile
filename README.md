@@ -1,7 +1,7 @@
 # docker-mobile
 
 Open-source, self-hostable mobile app (Flutter, iOS + Android) for full control of
-Docker from your phone. See `docs/superpowers/specs/` for the design.
+Docker from your phone.
 
 ## Layout
 - `agent/` - Go companion agent: authenticated transparent proxy to the Docker socket.

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/models/container_detail.dart';
 import '../state/providers.dart';
 import '../theme/app_theme.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 import 'logs_screen.dart';
@@ -42,7 +43,7 @@ class ContainerDetailScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: detail.when(
           loading: () => const SkeletonCards(key: ValueKey('loading')),
-          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(containerDetailProvider(containerId)), busy: detail.isRefreshing),
           data: (c) => KeyedSubtree(
             key: const ValueKey('data'),
             child: _Body(detail: c, containerId: containerId, containerName: containerName, onRun: _run),

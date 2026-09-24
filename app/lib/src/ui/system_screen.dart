@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../connect/disconnect.dart';
 import '../state/providers.dart';
 import 'events_screen.dart';
+import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 import 'widgets/skeletons.dart';
 
@@ -59,7 +60,7 @@ class SystemScreen extends ConsumerWidget {
         duration: const Duration(milliseconds: 300),
         child: dash.when(
           loading: () => const SkeletonCards(key: ValueKey('loading')),
-          error: (e, _) => Center(key: const ValueKey('error'), child: Text('Error: $e')),
+          error: (e, _) => ErrorView(key: const ValueKey('error'), error: e, onRetry: () => ref.invalidate(systemDashboardProvider), busy: dash.isRefreshing),
           data: (d) {
           final info = d.info;
           final v = d.version;
@@ -70,8 +71,10 @@ class SystemScreen extends ConsumerWidget {
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () async {
-                    ref.invalidate(systemDashboardProvider);
-                    await ref.read(systemDashboardProvider.future);
+                    try {
+                      ref.invalidate(systemDashboardProvider);
+                      await ref.read(systemDashboardProvider.future);
+                    } catch (_) {}
                   },
                   child: ListView(
                     physics: const AlwaysScrollableScrollPhysics(),

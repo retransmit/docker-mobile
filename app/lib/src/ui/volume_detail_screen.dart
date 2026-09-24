@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'widgets/error_view.dart';
 
 class VolumeDetailScreen extends ConsumerWidget {
   final String volumeName;
@@ -14,7 +15,7 @@ class VolumeDetailScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(volumeName)),
       body: detail.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
+        error: (e, _) => ErrorView(error: e, onRetry: () => ref.invalidate(volumeDetailProvider(volumeName)), busy: detail.isRefreshing),
         data: (v) {
           final client = ref.read(dockerClientProvider);
           return ListView(

@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'timeouts.dart';
+
 class TlsConfigException implements Exception {
   final String message;
   const TlsConfigException(this.message);
@@ -26,6 +28,7 @@ HttpClient buildTlsHttpClient({
   List<int>? caPem,
   bool insecure = false,
   String? keyPassword,
+  Duration connectTimeout = kConnectTimeout,
 }) {
   final SecurityContext ctx;
   try {
@@ -39,6 +42,7 @@ HttpClient buildTlsHttpClient({
     throw TlsConfigException(e.toString());
   }
   final client = HttpClient(context: ctx);
+  client.connectionTimeout = connectTimeout;
   final badCertCallback = insecureBadCertificateCallback(insecure);
   if (badCertCallback != null) {
     client.badCertificateCallback = badCertCallback;

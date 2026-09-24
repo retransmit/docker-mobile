@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:docker_mobile/src/transport/timeouts.dart';
 import 'package:docker_mobile/src/transport/tls_security.dart';
 
 void main() {
@@ -35,6 +36,13 @@ void main() {
       () => buildTlsHttpClient(clientCertPem: [1, 2, 3], clientKeyPem: [4, 5, 6]),
       throwsA(isA<TlsConfigException>()),
     );
+  });
+
+  test('buildTlsHttpClient applies the connect timeout', () {
+    final client = buildTlsHttpClient(clientCertPem: cert, clientKeyPem: key);
+    expect(client.connectionTimeout, kConnectTimeout);
+    final custom = buildTlsHttpClient(clientCertPem: cert, clientKeyPem: key, connectTimeout: const Duration(seconds: 3));
+    expect(custom.connectionTimeout, const Duration(seconds: 3));
   });
 }
 

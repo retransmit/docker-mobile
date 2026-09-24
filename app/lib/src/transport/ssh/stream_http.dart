@@ -1,11 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
-class StreamHttpException implements Exception {
+class StreamHttpException implements IOException {
   final String message;
   const StreamHttpException(this.message);
   @override
-  String toString() => 'StreamHttpException: $message';
+  String toString() => 'HTTP framing error: $message';
 }
 
 /// Serializes an HTTP/1.1 request onto a duplex via [add]. Deterministic header
