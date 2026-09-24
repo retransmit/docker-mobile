@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -23,6 +24,11 @@ class _FakeClient extends http.BaseClient {
 class _HangingClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) => Completer<http.StreamedResponse>().future;
+}
+
+class _ThrowingClient extends http.BaseClient {
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async => throw const SocketException('refused');
 }
 
 class _StreamingClient extends http.BaseClient {
@@ -132,5 +138,21 @@ void main() {
       expect(got, [1, 2]);
       expect(err, isNull);
     });
+  });
+
+  test('a body stream error surfaces as DockerError.network', () async {
+    final t = TlsTransport(baseUri: base, client: _StreamingClient(Stream.error(const SocketException('reset'))));
+    await expectLater(
+      t.stream('/x'),
+      emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
+    );
+  });
+
+  test('a send failure surfaces as DockerError.network', () async {
+    final t = TlsTransport(baseUri: base, client: _ThrowingClient());
+    await expectLater(
+      t.stream('/x'),
+      emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
+    );
   });
 }

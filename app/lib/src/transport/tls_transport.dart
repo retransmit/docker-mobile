@@ -108,13 +108,15 @@ class TlsTransport implements Transport {
 
 /// Hijacks `POST /exec/{id}/start` and returns the detached socket as a duplex
 /// channel. Exercised by the manual smoke test (real socket; not unit-tested).
-Future<ExecChannel> hijackExec(HttpClient httpClient, Uri baseUri, String execId, int cols, int rows) async {
+/// The upgrade response must arrive within [headerTimeout]; the hijacked stream itself never times out.
+Future<ExecChannel> hijackExec(HttpClient httpClient, Uri baseUri, String execId, int cols, int rows,
+    {Duration headerTimeout = kStreamHeaderTimeout}) async {
   final req = await httpClient.openUrl('POST', baseUri.replace(path: '/exec/$execId/start'));
   req.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
   req.headers.set(HttpHeaders.connectionHeader, 'Upgrade');
   req.headers.set('Upgrade', 'tcp');
   req.add(utf8.encode(jsonEncode({'Detach': false, 'Tty': true})));
-  final resp = await req.close();
+  final resp = await req.close().timeout(headerTimeout);
   final socket = await resp.detachSocket();
   return SocketExecChannel(
     input: socket,
