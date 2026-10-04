@@ -154,6 +154,7 @@ void main() {
         expect(h.factory.pinOverrides, ['FP-NEW']);
         h.store.list().then((ps) => expect(ps.single.ssh!.pinnedHostKey, 'FP-NEW'));
         async.flushMicrotasks();
+        expect(h.profileChanges, 1);
       });
     });
 
@@ -327,6 +328,36 @@ void main() {
       });
     });
 
+    test("a stale in-flight attempt does not block the next connection's reconnect", () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final d2 = FakeDaemon();
+        final d3 = FakeDaemon();
+        final stale = Completer<BuiltTransport>();
+        final h = _Harness([d1.transport, stale.future, d2.transport, d3.transport]);
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.factory.builds, 2);
+        h.session.connect(agentB);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d2.transport));
+        d2.events.addError(const SocketException('reset'));
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.factory.builds, 4);
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d3.transport));
+        final lateDaemon = FakeDaemon();
+        stale.complete(BuiltTransport(lateDaemon.transport));
+        async.flushMicrotasks();
+        expect(lateDaemon.transport.closed, isTrue);
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d3.transport));
+      });
+    });
+
     test('disconnect while waiting cancels the loop', () {
       fakeAsync((async) {
         final d1 = FakeDaemon();
@@ -453,6 +484,21 @@ void main() {
       expect(h.s.sessionId, 1);
       expect(d.transport.closed, isTrue);
       expect(d.activeEventStreams, 0);
+    });
+  });
+
+  test('dispose during an in-flight connect closes the late transport and never writes state', () {
+    fakeAsync((async) {
+      final d = FakeDaemon();
+      final pending = Completer<BuiltTransport>();
+      final h = _Harness([pending.future]);
+      h.session.connect(agentA);
+      async.flushMicrotasks();
+      h.session.dispose();
+      pending.complete(BuiltTransport(d.transport));
+      async.flushMicrotasks();
+      expect(d.transport.closed, isTrue);
+      expect(d.transport.calls, isEmpty);
     });
   });
 

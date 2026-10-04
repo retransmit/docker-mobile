@@ -78,7 +78,9 @@ class DockerSession extends StateNotifier<SessionState> {
   DockerApiClient? _client;
   Timer? _retryTimer;
   StreamSubscription<AppLifecycleState>? _lifecycleSub;
-  bool _attemptInFlight = false;
+  /// Generation of the reconnect attempt in flight, if any. An attempt left
+  /// over from an older generation never blocks one for the current one.
+  int? _attemptGeneration;
 
   /// Bumped by every connect/disconnect; async work started under an older
   /// generation discards its result.
@@ -108,12 +110,16 @@ class DockerSession extends StateNotifier<SessionState> {
     BuiltTransport? built;
     try {
       built = await _factory.build(profile, pinOverride: pinOverride);
+      if (!_current(gen)) {
+        await _closeQuietly(built.transport);
+        return;
+      }
       final probe = await _probe(built.transport);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
         return;
       }
-      final pinned = await _persistPin(profile, pinOverride, built.presentedHostKey);
+      final pinned = await _persistPin(profile, pinOverride, built.presentedHostKey, gen);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
         return;
@@ -209,13 +215,17 @@ class DockerSession extends StateNotifier<SessionState> {
     _retryTimer?.cancel();
     _retryTimer = null;
     final profile = state.profile;
-    if (_attemptInFlight || profile == null) return;
+    if (_attemptGeneration == _generation || profile == null) return;
     if (state.status != SessionStatus.reconnecting || !state.foreground) return;
-    _attemptInFlight = true;
     final gen = _generation;
+    _attemptGeneration = gen;
     BuiltTransport? built;
     try {
       built = await _factory.build(profile);
+      if (!_current(gen) || state.status != SessionStatus.reconnecting) {
+        await _closeQuietly(built.transport);
+        return;
+      }
       final probe = await _probe(built.transport);
       if (!_current(gen) || state.status != SessionStatus.reconnecting) {
         await _closeQuietly(built.transport);
@@ -254,7 +264,7 @@ class DockerSession extends StateNotifier<SessionState> {
         _scheduleAttempt();
       }
     } finally {
-      _attemptInFlight = false;
+      if (_attemptGeneration == gen) _attemptGeneration = null;
     }
   }
 
@@ -304,7 +314,12 @@ class DockerSession extends StateNotifier<SessionState> {
   }
 
   /// Saves a first-use or newly trusted SSH host key into the profile.
-  Future<ConnectionProfile> _persistPin(ConnectionProfile profile, String? pinOverride, String? presented) async {
+  Future<ConnectionProfile> _persistPin(
+    ConnectionProfile profile,
+    String? pinOverride,
+    String? presented,
+    int gen,
+  ) async {
     final ssh = profile.ssh;
     if (profile.kind != ConnectionKind.ssh || ssh == null) return profile;
     final newPin = pinOverride ?? ssh.pinnedHostKey ?? presented;
@@ -322,7 +337,7 @@ class DockerSession extends StateNotifier<SessionState> {
       ),
     );
     await _profiles.update(updated);
-    _onProfilesChanged?.call();
+    if (_current(gen)) _onProfilesChanged?.call();
     return updated;
   }
 
