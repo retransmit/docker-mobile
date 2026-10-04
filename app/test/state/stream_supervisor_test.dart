@@ -216,4 +216,86 @@ void main() {
       expect(h.opens.controllers, hasLength(1));
     });
   });
+
+  test('a stream open for the policy cap without error counts as recovered', () {
+    fakeAsync((async) {
+      final h = _Harness()..sup.start();
+      h.opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 1));
+      expect(h.opens.controllers, hasLength(2));
+      async.elapse(const Duration(seconds: 30)); // quiet, no data
+      h.opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      expect(h.last, SupervisorStatus.retrying);
+      async.elapse(const Duration(seconds: 1)); // 1 s again, not 2 s
+      expect(h.opens.controllers, hasLength(3));
+    });
+  });
+
+  test('an error within the policy cap keeps backing off', () {
+    fakeAsync((async) {
+      final h = _Harness()..sup.start();
+      h.opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 1));
+      expect(h.opens.controllers, hasLength(2));
+      async.elapse(const Duration(seconds: 29));
+      h.opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 1));
+      expect(h.opens.controllers, hasLength(2)); // 2 s now, not 1 s
+      async.elapse(const Duration(seconds: 1));
+      expect(h.opens.controllers, hasLength(3));
+      // The errored stream's stability timer must not reset the count while
+      // the retry was pending: the next delay is 4 s.
+      h.opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 3));
+      expect(h.opens.controllers, hasLength(3));
+      async.elapse(const Duration(seconds: 1));
+      expect(h.opens.controllers, hasLength(4));
+    });
+  });
+
+  test('pause from onStatus(retrying) stops the retry timer', () {
+    fakeAsync((async) {
+      final opens = _Opens();
+      late final StreamSupervisor<int> sup;
+      sup = StreamSupervisor<int>(
+        open: opens.open,
+        onData: (_) {},
+        onStatus: (s, e) {
+          if (s == SupervisorStatus.retrying) sup.pause();
+        },
+        policy: ReconnectPolicy(jitter: 0),
+      );
+      sup.start();
+      opens.controllers.last.addError(_net);
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 10));
+      expect(opens.controllers, hasLength(1));
+      expect(sup.status, SupervisorStatus.paused);
+    });
+  });
+
+  test('dispose from onStatus(streaming) never listens to the opened stream', () {
+    fakeAsync((async) {
+      final opens = _Opens();
+      late final StreamSupervisor<int> sup;
+      sup = StreamSupervisor<int>(
+        open: opens.open,
+        onData: (_) {},
+        onStatus: (s, e) {
+          if (s == SupervisorStatus.streaming) sup.dispose();
+        },
+        policy: ReconnectPolicy(jitter: 0),
+      );
+      sup.start();
+      async.flushMicrotasks();
+      expect(opens.controllers, hasLength(1));
+      expect(opens.controllers.last.hasListener, isFalse);
+      expect(async.pendingTimers, isEmpty);
+    });
+  });
 }

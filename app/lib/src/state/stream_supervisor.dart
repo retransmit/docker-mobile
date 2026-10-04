@@ -6,21 +6,25 @@ import 'dart:async';
 import '../api/docker_error.dart';
 import '../session/reconnect_policy.dart';
 
+/// Where a [StreamSupervisor] is in its lifecycle.
 enum SupervisorStatus { idle, streaming, paused, retrying, failed, done }
 
 /// Keeps one long-lived stream alive: reopens it with backoff after retryable
 /// errors, pauses and resumes it on request, and reports every transition.
 /// [open] is called afresh on every (re)connect, so it can pick up a new
-/// transport or a resume cursor.
+/// transport or a resume cursor. A stream that stays open for the policy cap
+/// without an error counts as recovered.
 class StreamSupervisor<T> {
   final Stream<T> Function() _open;
   final void Function(T) _onData;
   final void Function(SupervisorStatus status, DockerError? error) _onStatus;
   final ReconnectPolicy _policy;
+  /// Treats a clean end of the stream as a retryable loss instead of done.
   final bool retryOnDone;
 
   StreamSubscription<T>? _sub;
   Timer? _timer;
+  Timer? _stableTimer;
   int _attempt = 0;
   int _generation = 0;
   bool _resumable = false;
@@ -38,6 +42,7 @@ class StreamSupervisor<T> {
         _onStatus = onStatus,
         _policy = policy ?? ReconnectPolicy();
 
+  /// The current lifecycle status.
   SupervisorStatus get status => _status;
 
   /// Opens the stream for the first time.
@@ -72,6 +77,7 @@ class StreamSupervisor<T> {
     _connect();
   }
 
+  /// Cancels the stream and any pending retry; no status is reported after.
   void dispose() {
     _disposed = true;
     _cancel();
@@ -86,9 +92,15 @@ class StreamSupervisor<T> {
     _generation++;
     _timer?.cancel();
     _timer = null;
+    _cancelStable();
     final sub = _sub;
     _sub = null;
     sub?.cancel();
+  }
+
+  void _cancelStable() {
+    _stableTimer?.cancel();
+    _stableTimer = null;
   }
 
   void _connect() {
@@ -103,6 +115,7 @@ class StreamSupervisor<T> {
       return;
     }
     _set(SupervisorStatus.streaming);
+    if (gen != _generation || _disposed) return;
     _sub = stream.listen(
       (data) {
         if (gen != _generation) return;
@@ -112,11 +125,13 @@ class StreamSupervisor<T> {
       onError: (Object e) {
         if (gen != _generation) return;
         _sub = null;
+        _cancelStable();
         _handleError(e);
       },
       onDone: () {
         if (gen != _generation) return;
         _sub = null;
+        _cancelStable();
         if (retryOnDone) {
           _handleError(const DockerError(DockerErrorKind.network, 'The stream closed'));
         } else {
@@ -125,6 +140,11 @@ class StreamSupervisor<T> {
       },
       cancelOnError: true,
     );
+    _stableTimer = Timer(_policy.cap, () {
+      if (gen != _generation) return;
+      _stableTimer = null;
+      _attempt = 0;
+    });
   }
 
   void _handleError(Object e) {
@@ -135,8 +155,9 @@ class StreamSupervisor<T> {
       _set(SupervisorStatus.failed, error);
       return;
     }
-    _set(SupervisorStatus.retrying, error);
     final gen = _generation;
+    _set(SupervisorStatus.retrying, error);
+    if (gen != _generation || _disposed) return;
     _timer = Timer(_policy.delay(_attempt), () {
       if (gen != _generation) return;
       _timer = null;
