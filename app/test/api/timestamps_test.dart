@@ -27,5 +27,7 @@ void main() {
     expect(rfc3339ToEpochNanos('2026-01-02T03:04:05.000000001Z'), secs * 1000000000 + 1);
     expect(rfc3339ToEpochNanos('2026-01-02T03:04:05Z'), secs * 1000000000);
     expect(rfc3339ToEpochNanos('nope'), isNull);
+    // DateTime accepts a space before the zone; the fraction is then not a number.
+    expect(rfc3339ToEpochNanos('2026-01-02T03:04:05.123 Z'), isNull);
   });
 }

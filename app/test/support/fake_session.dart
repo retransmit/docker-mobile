@@ -103,6 +103,35 @@ class FakeDaemon {
       transport.calls.where((c) => c.method == 'STREAM' && c.path.endsWith('/events')).toList();
 }
 
+/// A [FakeDaemon] that also has container `a`, a TTY (so its log bytes are
+/// sent unframed): the inspect answers, and every logs or stats open gets a
+/// stream that stays open. The test writes log bytes to [logs].
+class FakeContainerDaemon extends FakeDaemon {
+  FakeContainerDaemon() {
+    transport
+      ..onGet(RegExp(r'/containers/a/json$'), (_) => http.Response(
+            '{"Id":"a","Name":"/web","Config":{"Image":"nginx","Tty":true},"State":{"Status":"running"}}',
+            200,
+          ))
+      ..onStream(RegExp(r'/containers/a/logs$'), (_) => (logs = StreamController<List<int>>()).stream)
+      ..onStream(RegExp(r'/containers/a/stats$'), (_) => StreamController<List<int>>().stream);
+  }
+
+  /// The most recently opened logs stream.
+  late StreamController<List<int>> logs;
+
+  List<RecordedCall> get logOpens => _opens('logs');
+
+  List<RecordedCall> get statsOpens => _opens('stats');
+
+  List<RecordedCall> _opens(String stream) =>
+      transport.calls.where((c) => c.method == 'STREAM' && c.path.endsWith('/containers/a/$stream')).toList();
+}
+
+/// Two log timestamps one nanosecond apart, in the daemon's format.
+const firstLogStamp = '2026-01-02T03:04:05.000000001Z';
+const secondLogStamp = '2026-01-02T03:04:05.000000002Z';
+
 /// One NDJSON line of a Docker event.
 String eventLine({String type = 'container', String action = 'start', String id = 'c1', int? timeNano}) =>
     '${jsonEncode({

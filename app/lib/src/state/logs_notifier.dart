@@ -74,8 +74,13 @@ class LogsNotifier extends StateNotifier<LogsState> {
   /// Epoch nanoseconds of the newest line received; the resume point.
   int? _cursor;
 
-  /// Lines at or before this are repeats from an inclusive `since`.
+  /// How many lines carried exactly [_cursor].
+  int _atCursor = 0;
+
+  /// `since` is inclusive: a resume resends the lines stamped at the cursor.
+  /// Lines before [_floor], and the first [_repeats] lines at it, are repeats.
   int? _floor;
+  int _repeats = 0;
   bool _live = true;
 
   /// Whether the stream last opened follows; a one-off fetch does not.
@@ -101,6 +106,7 @@ class LogsNotifier extends StateNotifier<LogsState> {
     _partial.clear();
     final cursor = _cursor;
     _floor = cursor;
+    _repeats = _atCursor;
     _openFollows = state.following;
     return client.streamContainerLogs(
       _id,
@@ -141,13 +147,24 @@ class LogsNotifier extends StateNotifier<LogsState> {
       final nanos = rfc3339ToEpochNanos(rawTs);
       if (nanos != null) {
         final floor = _floor;
-        if (floor != null && nanos <= floor) return null;
+        if (floor != null) {
+          if (nanos < floor) return null;
+          if (nanos == floor && _repeats > 0) {
+            _repeats--;
+            return null;
+          }
+        }
         final cursor = _cursor;
-        if (cursor == null || nanos > cursor) _cursor = nanos;
+        if (cursor == null || nanos > cursor) {
+          _cursor = nanos;
+          _atCursor = 1;
+        } else if (nanos == cursor) {
+          _atCursor++;
+        }
         return LogLine(
           source: source,
           text: raw.substring(space + 1),
-          timestamp: DateTime.tryParse(rawTs),
+          timestamp: DateTime.fromMicrosecondsSinceEpoch(nanos ~/ 1000, isUtc: true),
           rawTimestamp: rawTs,
         );
       }
@@ -220,7 +237,9 @@ class LogsNotifier extends StateNotifier<LogsState> {
   /// Starts over with a new tail size (a one-off fetch while paused).
   void setTail(int? value) {
     _cursor = null;
+    _atCursor = 0;
     _floor = null;
+    _repeats = 0;
     _buf.clear();
     state = state.copyWith(tail: value, clearTail: value == null, lines: _buf);
     if (_live) {

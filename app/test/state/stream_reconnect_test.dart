@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,30 +11,10 @@ import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 
 import '../support/fake_session.dart';
-import '../support/fake_transport.dart';
-
-/// A daemon with container `a`: every logs or stats open gets a stream that
-/// stays open, and the test writes log bytes to [logs].
-class _Daemon extends FakeDaemon {
-  _Daemon() {
-    transport
-      ..onStream(RegExp(r'/containers/a/logs$'), (_) => (logs = StreamController<List<int>>()).stream)
-      ..onStream(RegExp(r'/containers/a/stats$'), (_) => StreamController<List<int>>().stream);
-  }
-
-  /// The most recently opened logs stream.
-  late StreamController<List<int>> logs;
-
-  List<RecordedCall> opens(String stream) =>
-      transport.calls.where((c) => c.method == 'STREAM' && c.path.endsWith('/containers/a/$stream')).toList();
-}
-
-const _first = '2026-01-02T03:04:05.000000001Z';
-const _second = '2026-01-02T03:04:05.000000002Z';
 
 void main() {
   test('after every reconnect logs and stats reopen once, on the new transport, from the cursor', () async {
-    final daemons = [for (var i = 0; i < 4; i++) _Daemon()];
+    final daemons = [for (var i = 0; i < 4; i++) FakeContainerDaemon()];
     final c = ProviderContainer(overrides: [
       transportFactoryProvider.overrideWithValue(FakeTransportFactory([for (final d in daemons) d.transport])),
       reconnectPolicyProvider.overrideWithValue(immediatePolicy()),
@@ -49,10 +28,10 @@ void main() {
     c.listen(logsProvider(key), (_, _) {});
     c.listen(statsProvider('a'), (_, _) {});
     await pumpEventQueue();
-    expect(daemons.first.opens('logs'), hasLength(1));
-    expect(daemons.first.opens('stats'), hasLength(1));
+    expect(daemons.first.logOpens, hasLength(1));
+    expect(daemons.first.statsOpens, hasLength(1));
 
-    daemons.first.logs.add(utf8.encode('$_first first\n'));
+    daemons.first.logs.add(utf8.encode('$firstLogStamp first\n'));
     await pumpEventQueue();
     expect(c.read(logsProvider(key)).lines.single.text, 'first');
 
@@ -63,15 +42,15 @@ void main() {
 
       final why = 'reconnect $i';
       expect(c.read(sessionProvider).transport, same(current.transport), reason: why);
-      expect(current.opens('logs'), hasLength(1), reason: why);
-      expect(current.opens('stats'), hasLength(1), reason: why);
-      expect(current.opens('logs').single.query!['since'], rfc3339ToUnixNanos(_first), reason: why);
+      expect(current.logOpens, hasLength(1), reason: why);
+      expect(current.statsOpens, hasLength(1), reason: why);
+      expect(current.logOpens.single.query!['since'], rfc3339ToUnixNanos(firstLogStamp), reason: why);
       // The transport that was replaced is not used again.
-      expect(old.opens('logs'), hasLength(1), reason: why);
-      expect(old.opens('stats'), hasLength(1), reason: why);
+      expect(old.logOpens, hasLength(1), reason: why);
+      expect(old.statsOpens, hasLength(1), reason: why);
     }
 
-    daemons.last.logs.add(utf8.encode('$_second second\n'));
+    daemons.last.logs.add(utf8.encode('$secondLogStamp second\n'));
     await pumpEventQueue();
     expect(c.read(logsProvider(key)).lines.map((l) => l.text), ['first', 'second']);
   });

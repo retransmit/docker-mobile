@@ -27,5 +27,8 @@ int? rfc3339ToEpochNanos(String ts) {
   final s = rfc3339ToUnixNanos(ts);
   if (s == null) return null;
   final dot = s.indexOf('.');
-  return int.parse(s.substring(0, dot)) * 1000000000 + int.parse(s.substring(dot + 1));
+  final secs = int.tryParse(s.substring(0, dot));
+  final nanos = int.tryParse(s.substring(dot + 1));
+  if (secs == null || nanos == null) return null;
+  return secs * 1000000000 + nanos;
 }

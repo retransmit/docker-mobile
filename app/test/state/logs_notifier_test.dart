@@ -471,4 +471,56 @@ void main() {
     expect(opens(), hasLength(3));
     n.dispose();
   });
+
+  test('a resume keeps a new line that shares the cursor timestamp', () {
+    fakeAsync((async) {
+      final controllers = <StreamController<List<int>>>[];
+      final t = FakeTransport()
+        ..onStream('/containers/a/logs', (_) {
+          final c = StreamController<List<int>>();
+          controllers.add(c);
+          return c.stream;
+        });
+      final n = LogsNotifier(() => DockerApiClient(t), 'a', false, policy: ReconnectPolicy(jitter: 0));
+      async.flushMicrotasks();
+      void send(String lines) {
+        controllers.last.add(frame(1, utf8.encode(lines)));
+        async.flushMicrotasks();
+      }
+
+      // Breaks the stream with a retryable error; the supervisor reopens it.
+      void cut() {
+        controllers.last.addError(const DockerError(DockerErrorKind.network, 'reset'));
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 1));
+      }
+
+      Iterable<String> shown() => n.state.lines.map((l) => l.text);
+
+      send('${ts(1)} a\n');
+      cut();
+      send('${ts(1)} a\n${ts(1)} b\n${ts(2)} c\n'); // b is new and carries the stamp of a
+      expect(shown(), ['a', 'b', 'c']);
+
+      cut();
+      send('${ts(1)} a\n${ts(1)} b\n${ts(2)} c\n${ts(3)} d\n');
+      expect(shown(), ['a', 'b', 'c', 'd']); // b is not shown twice
+
+      // Two lines already shown at the cursor: both are repeats, a third one is new.
+      send('${ts(3)} e\n');
+      cut();
+      send('${ts(3)} d\n${ts(3)} e\n${ts(3)} f\n${ts(4)} g\n');
+      expect(shown(), ['a', 'b', 'c', 'd', 'e', 'f', 'g']);
+      expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(4));
+      n.dispose();
+    });
+  });
+
+  test('the line timestamp is the daemon stamp in UTC, to the microsecond', () async {
+    final client = DockerApiClient(chunksFake([frame(1, utf8.encode('2026-01-02T03:04:05.123456789Z hello\n'))]));
+    final n = LogsNotifier(() => client, 'a', false);
+    await pumpEventQueue();
+    expect(n.state.lines.single.timestamp, DateTime.utc(2026, 1, 2, 3, 4, 5, 123, 456));
+    n.dispose();
+  });
 }
