@@ -28,6 +28,21 @@ class _SpyClient extends http.BaseClient {
   }
 }
 
+class _CountingClient extends http.BaseClient {
+  final Stream<List<int>> body;
+  final void Function() onClose;
+  _CountingClient(this.body, this.onClose);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async => http.StreamedResponse(body, 200);
+
+  @override
+  void close() {
+    onClose();
+    super.close();
+  }
+}
+
 class _HangingClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) => Completer<http.StreamedResponse>().future;
@@ -152,5 +167,33 @@ void main() {
       t.stream('/x'),
       emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
     );
+  });
+
+  test('close() also closes the clients of streams that are still open', () async {
+    final spy = _SpyClient(StreamController<List<int>>().stream);
+    final t = AgentTransport(
+      baseUri: Uri.parse('http://10.0.0.5:8080'),
+      token: 'secret',
+      streamClientFactory: () => spy,
+    );
+    final sub = t.stream('/events').listen((_) {}, onError: (_) {});
+    await pumpEventQueue();
+    expect(spy.closed, isFalse);
+    await t.close();
+    expect(spy.closed, isTrue);
+    await sub.cancel();
+  });
+
+  test('a stream that ended normally is not closed twice by close()', () async {
+    var closes = 0;
+    final spy = _CountingClient(Stream.value([1]), () => closes++);
+    final t = AgentTransport(
+      baseUri: Uri.parse('http://10.0.0.5:8080'),
+      token: 'secret',
+      streamClientFactory: () => spy,
+    );
+    await t.stream('/x').toList();
+    await t.close();
+    expect(closes, 1);
   });
 }

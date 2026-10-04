@@ -17,6 +17,9 @@ class AgentTransport implements Transport {
   final http.Client _client;
   final http.Client Function() _streamClientFactory;
 
+  /// Per-stream clients that are still open, so [close] can tear them down.
+  final Set<http.Client> _openStreamClients = {};
+
   /// Budget for the response headers of a GET stream; stream bodies never time out.
   final Duration streamHeaderTimeout;
 
@@ -50,12 +53,14 @@ class AgentTransport implements Transport {
 
   Stream<List<int>> _openStream(http.Request request, Duration headerBudget) {
     final client = _streamClientFactory();
+    _openStreamClients.add(client);
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
     var clientClosed = false;
     void closeClient() {
       if (!clientClosed) {
         clientClosed = true;
+        _openStreamClients.remove(client);
         client.close();
       }
     }
@@ -147,8 +152,16 @@ class AgentTransport implements Transport {
     return _WebSocketExecChannel(channel);
   }
 
+  /// Closes the shared client and every stream still open on this transport.
   @override
-  Future<void> close() async => _client.close();
+  Future<void> close() async {
+    _client.close();
+    final open = _openStreamClients.toList();
+    _openStreamClients.clear();
+    for (final c in open) {
+      c.close();
+    }
+  }
 }
 
 class _WebSocketExecChannel implements ExecChannel {

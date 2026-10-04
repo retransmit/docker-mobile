@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:dartssh2/dartssh2.dart' show SSHStateError;
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
@@ -233,5 +234,21 @@ void main() {
       expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
       expect(closed, isTrue);
     });
+  });
+
+  test('a dropped SSH connection surfaces as DockerError.network on buffered calls', () async {
+    final t = SshTransport(openDuplex: () async => throw SSHStateError('Connection closed while waiting for channel open'));
+    await expectLater(
+      t.get('/x'),
+      throwsA(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
+    );
+  });
+
+  test('a dropped SSH connection surfaces as DockerError.network on streams', () async {
+    final t = SshTransport(openDuplex: () async => throw SSHStateError('Connection closed while waiting for channel open'));
+    await expectLater(
+      t.stream('/events'),
+      emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.network)),
+    );
   });
 }
