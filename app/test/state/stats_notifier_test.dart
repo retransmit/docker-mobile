@@ -96,4 +96,17 @@ void main() {
     expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
     n.dispose();
   });
+
+  test('retry is ignored while the session is away', () async {
+    final t = FakeTransport()..onStream('/containers/a/stats', (_) => StreamController<List<int>>().stream);
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    await pumpEventQueue();
+
+    n.setLive(false);
+    n.retry();
+    await pumpEventQueue();
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(1));
+    expect(n.state.status, StatsStatus.reconnecting);
+    n.dispose();
+  });
 }

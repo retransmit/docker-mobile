@@ -381,4 +381,94 @@ void main() {
     expect(n.state.status, LogsStatus.idle);
     n.dispose();
   });
+
+  test('play during a one-off fetch starts following', () async {
+    final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+
+    n.setFollowing(false);
+    n.setTail(100); // a one-off fetch, still open
+    n.setFollowing(true);
+    await pumpEventQueue();
+
+    final opens = t.calls.where((c) => c.method == 'STREAM').toList();
+    expect(opens.last.query!['follow'], 'true');
+    expect(opens.last.query!['tail'], '100');
+    expect(opens, hasLength(3)); // the first follow, the one-off fetch, the follow that replaces it
+    expect(n.state.status, LogsStatus.streaming);
+    n.dispose();
+  });
+
+  test('a tail change while paused and away is fetched when the session returns', () async {
+    final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+
+    n.setFollowing(false);
+    n.setLive(false);
+    n.setTail(100);
+    await pumpEventQueue();
+    expect(opens(), hasLength(1)); // nothing is fetched while the session is away
+
+    n.setLive(true);
+    await pumpEventQueue();
+    expect(opens(), hasLength(2));
+    final q = opens().last.query!;
+    expect(q['tail'], '100');
+    expect(q['follow'], 'false');
+    expect(q.containsKey('since'), isFalse);
+    expect(n.state.following, isFalse);
+    n.dispose();
+  });
+
+  test('a one-off fetch cut short by the session is made up from the cursor', () async {
+    final controllers = <StreamController<List<int>>>[];
+    final t = FakeTransport()
+      ..onStream('/containers/a/logs', (_) {
+        final c = StreamController<List<int>>();
+        controllers.add(c);
+        return c.stream;
+      });
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+
+    n.setFollowing(false);
+    n.setTail(100); // the one-off fetch
+    controllers.last.add(frame(1, utf8.encode('${ts(7)} seven\n')));
+    await pumpEventQueue();
+    expect(n.state.lines.single.text, 'seven');
+
+    n.setLive(false); // the session drops before the fetch is done
+    n.setLive(true);
+    await pumpEventQueue();
+
+    expect(opens(), hasLength(3));
+    final q = opens().last.query!;
+    expect(q['follow'], 'false');
+    expect(q['since'], formatUnixNanos(base + 7));
+    expect(n.state.following, isFalse);
+    n.dispose();
+  });
+
+  test('retry is ignored while the session is away', () async {
+    final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+
+    n.setLive(false);
+    n.retry();
+    await pumpEventQueue();
+    expect(opens(), hasLength(1));
+    expect(n.state.status, LogsStatus.reconnecting);
+
+    n.setLive(true); // the stream restarts by itself
+    n.retry(); // and Retry works again
+    await pumpEventQueue();
+    expect(opens(), hasLength(3));
+    n.dispose();
+  });
 }

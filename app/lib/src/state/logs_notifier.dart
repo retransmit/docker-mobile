@@ -78,6 +78,13 @@ class LogsNotifier extends StateNotifier<LogsState> {
   int? _floor;
   bool _live = true;
 
+  /// Whether the stream last opened follows; a one-off fetch does not.
+  bool _openFollows = true;
+
+  /// A one-off fetch is owed: the tail changed while the session was away,
+  /// or the session dropped in the middle of one.
+  bool _reloadOwed = false;
+
   LogsNotifier(this._client, this._id, this._tty, {ReconnectPolicy? policy}) : super(const LogsState()) {
     _supervisor = StreamSupervisor<LogChunk>(
       open: _open,
@@ -94,6 +101,7 @@ class LogsNotifier extends StateNotifier<LogsState> {
     _partial.clear();
     final cursor = _cursor;
     _floor = cursor;
+    _openFollows = state.following;
     return client.streamContainerLogs(
       _id,
       tty: _tty,
@@ -166,19 +174,28 @@ class LogsNotifier extends StateNotifier<LogsState> {
 
   /// Runs the stream only while the session is live and the user follows.
   void _sync() {
+    final s = _supervisor.status;
     if (_live && state.following) {
-      final s = _supervisor.status;
-      if (s == SupervisorStatus.done || s == SupervisorStatus.failed) {
-        // Ended or gave up earlier: look again from the cursor.
-        _supervisor.retry();
-      } else {
+      _reloadOwed = false; // following starts from the tail or the cursor anyway
+      if (s == SupervisorStatus.paused) {
         _supervisor.resume();
+      } else if (s == SupervisorStatus.done || s == SupervisorStatus.failed || !_openFollows) {
+        // Ended, gave up, or only a one-off fetch is running: follow from
+        // the cursor.
+        _supervisor.retry();
       }
-    } else {
-      _supervisor.pause();
-      if (_supervisor.status == SupervisorStatus.paused) {
-        state = state.copyWith(status: _live ? LogsStatus.paused : LogsStatus.reconnecting);
-      }
+      return;
+    }
+    final fetching = s == SupervisorStatus.streaming || s == SupervisorStatus.retrying;
+    if (!_live && fetching && !_openFollows) _reloadOwed = true; // cut short by the session
+    _supervisor.pause();
+    if (_supervisor.status == SupervisorStatus.paused) {
+      state = state.copyWith(status: _live ? LogsStatus.paused : LogsStatus.reconnecting);
+    }
+    if (_live && _reloadOwed) {
+      // Make up the one-off fetch now that the session is back.
+      _reloadOwed = false;
+      _supervisor.retry();
     }
   }
 
@@ -206,13 +223,20 @@ class LogsNotifier extends StateNotifier<LogsState> {
     _floor = null;
     _buf.clear();
     state = state.copyWith(tail: value, clearTail: value == null, lines: _buf);
-    if (_live) _supervisor.retry();
+    if (_live) {
+      _supervisor.retry();
+    } else {
+      _reloadOwed = true;
+    }
   }
 
   void setSearch(String value) => state = state.copyWith(search: value);
 
-  /// Reopens now, continuing from the last line received.
-  void retry() => _supervisor.retry();
+  /// Reopens now, continuing from the last line received. Ignored while the
+  /// session is away: the stream restarts by itself when it returns.
+  void retry() {
+    if (_live) _supervisor.retry();
+  }
 
   String snapshot() => state.lines.map((l) => l.text).join('\n');
 

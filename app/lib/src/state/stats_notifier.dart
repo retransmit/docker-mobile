@@ -114,8 +114,11 @@ class StatsNotifier extends StateNotifier<StatsState> {
     }
   }
 
-  /// Reopens now with a fresh attempt count (the error view's Retry).
-  void retry() => _supervisor.retry();
+  /// Reopens now with a fresh attempt count (the error view's Retry). Ignored
+  /// while the session is away: the stream restarts by itself when it returns.
+  void retry() {
+    if (_live) _supervisor.retry();
+  }
 
   @override
   void dispose() {
