@@ -189,6 +189,45 @@ void main() {
     expect(find.byType(HomeScreen, skipOffstage: false), findsNothing);
   });
 
+  for (final outcome in ['answers', 'times out']) {
+    testWidgets('a cancelled connect that $outcome late opens nothing', (tester) async {
+      final store = InMemoryProfileStore();
+      await store.add(_a);
+      await store.add(_b);
+      final held = Completer<Transport>(); // Alpha's handshake
+      final lateDaemon = FakeDaemon();
+      final beta = FakeDaemon();
+      await pumpListWithSession(tester, store, FakeTransportFactory([held.future, beta.transport]));
+      final container = ProviderScope.containerOf(tester.element(find.byType(ProfilesScreen)));
+
+      await tester.tap(find.text('Alpha')); // hangs
+      await tester.pump();
+      await tester.tap(find.text('Alpha')); // cancelled from its row
+      await tester.pump();
+      await tester.tap(find.text('Beta')); // connects and opens Home
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byType(HomeScreen), findsOneWidget);
+
+      // Alpha's attempt finishes only now, while the session is Beta's.
+      if (outcome == 'answers') {
+        held.complete(lateDaemon.transport);
+      } else {
+        held.completeError(const DockerError(DockerErrorKind.timeout, 'Timed out waiting for the daemon'));
+      }
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(find.byType(HomeScreen, skipOffstage: false), findsOneWidget);
+      final session = container.read(sessionProvider);
+      expect(session.status, SessionStatus.connected);
+      expect(session.profile!.id, 'b');
+      expect(session.transport, same(beta.transport));
+      expect(beta.transport.closed, isFalse);
+      if (outcome == 'answers') expect(lateDaemon.transport.closed, isTrue);
+    });
+  }
+
   testWidgets('the add button and the row menus are off while connecting', (tester) async {
     await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
     await tester.tap(find.byType(FloatingActionButton));

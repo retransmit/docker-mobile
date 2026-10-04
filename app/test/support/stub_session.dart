@@ -36,6 +36,10 @@ class StubSession extends DockerSession {
     state = state.copyWith(clearWarning: true);
   }
 
+  /// Only records the profile; a stub never connects.
   @override
-  Future<void> connect(ConnectionProfile profile, {String? pinOverride}) async => connects.add(profile);
+  Future<bool> connect(ConnectionProfile profile, {String? pinOverride}) async {
+    connects.add(profile);
+    return false;
+  }
 }

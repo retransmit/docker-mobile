@@ -1,21 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../session/session_state.dart';
 import '../session/transport_factory.dart';
 import '../state/providers.dart';
 import '../storage/profile_store.dart';
 import '../ui/home_screen.dart';
 
-/// Connects the session to [profile] and opens Home on success. The only
-/// place the SSH host-key TOFU dialog lives. A failed connect stays in the
-/// session state, which the Connections screen shows inline.
+/// Connects the session to [profile] and opens Home when this very attempt
+/// connected; one that failed or was cancelled opens nothing, whatever the
+/// session is doing by then. The only place the SSH host-key TOFU dialog
+/// lives. A failed connect stays in the session state, which the
+/// Connections screen shows inline.
 Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionProfile profile,
     {String? pinOverride}) async {
   final navigator = Navigator.of(context);
   final session = ref.read(sessionProvider.notifier);
+  final bool connected;
   try {
-    await session.connect(profile, pinOverride: pinOverride);
+    connected = await session.connect(profile, pinOverride: pinOverride);
   } on HostKeyMismatchException catch (e) {
     if (!context.mounted) return;
     final trust = await showDialog<bool>(
@@ -35,9 +37,7 @@ Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionPro
     }
     return;
   }
-  if (!context.mounted) return;
-  final s = ref.read(sessionProvider);
-  if (s.status == SessionStatus.connected) {
+  if (connected && context.mounted) {
     navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
   }
 }

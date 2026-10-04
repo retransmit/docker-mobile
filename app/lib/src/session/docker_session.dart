@@ -97,11 +97,13 @@ class DockerSession extends StateNotifier<SessionState> {
   DockerApiClient? get client => _client;
 
   /// Builds a transport for [profile], probes the daemon and goes live.
+  /// Returns true when this attempt connected the session, and false when it
+  /// failed (see `state.error`), was ignored because another attempt was
+  /// already in flight, or was cancelled or superseded before it finished.
   /// Throws only [HostKeyMismatchException] (and only while this attempt is
-  /// still current); other failures leave the session disconnected with
-  /// `state.error` set.
-  Future<void> connect(ConnectionProfile profile, {String? pinOverride}) async {
-    if (state.status == SessionStatus.connecting) return;
+  /// still current).
+  Future<bool> connect(ConnectionProfile profile, {String? pinOverride}) async {
+    if (state.status == SessionStatus.connecting) return false;
     _lifecycleSub ??= _lifecycle.changes.listen(_onLifecycle);
     _stopActivity();
     final previous = state.transport;
@@ -121,17 +123,17 @@ class DockerSession extends StateNotifier<SessionState> {
       built = await _factory.build(profile, pinOverride: pinOverride);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
-        return;
+        return false;
       }
       final probe = await _probe(built.transport);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
-        return;
+        return false;
       }
       final pinned = await _persistPin(profile, pinOverride, built.presentedHostKey, gen);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
-        return;
+        return false;
       }
       _client = _clientFactory(built.transport, probe.apiVersion);
       state = state.copyWith(
@@ -145,9 +147,10 @@ class DockerSession extends StateNotifier<SessionState> {
       );
       _hub.start();
       if (!state.foreground) _hub.pause();
+      return true;
     } on HostKeyMismatchException {
       // A superseded handshake must not raise the trust dialog.
-      if (!_current(gen)) return;
+      if (!_current(gen)) return false;
       state = SessionState(profile: profile, sessionId: sessionId, foreground: state.foreground);
       rethrow;
     } catch (e) {
@@ -161,6 +164,7 @@ class DockerSession extends StateNotifier<SessionState> {
           error: DockerError.wrap(e),
         );
       }
+      return false;
     }
   }
 

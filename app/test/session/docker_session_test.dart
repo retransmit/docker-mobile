@@ -16,6 +16,7 @@ import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 
 import '../support/fake_session.dart';
+import '../support/fake_transport.dart';
 
 const agentA = ConnectionProfile(id: 'a', name: 'A', kind: ConnectionKind.agent,
     agent: AgentCredentials(baseUri: 'http://a:1', token: 't'));
@@ -32,18 +33,45 @@ class _ThrowingInvalidator extends RecordingInvalidator {
   void all() => throw StateError('refresh failed');
 }
 
+/// A daemon whose `/_ping` answers only once [answer] is completed.
+class _HeldPing extends FakeTransport {
+  _HeldPing() {
+    onGet('/_ping', (_) => http.Response('OK', 200));
+    onGet('/version', (_) => http.Response(jsonEncode({'Version': '27.0', 'ApiVersion': '1.46'}), 200));
+  }
+
+  final answer = Completer<void>();
+
+  @override
+  Future<http.Response> get(String path, {Map<String, String>? query}) async {
+    if (path == '/_ping') await answer.future;
+    return super.get(path, query: query);
+  }
+}
+
+/// A profile store whose `update` finishes only once [written] is completed.
+class _HeldUpdateStore extends InMemoryProfileStore {
+  final written = Completer<void>();
+
+  @override
+  Future<void> update(ConnectionProfile profile) async {
+    await written.future;
+    return super.update(profile);
+  }
+}
+
 class _Harness {
-  _Harness(List<Object> builds, {ReconnectPolicy? policy, RecordingInvalidator? invalidator})
+  _Harness(List<Object> builds, {ReconnectPolicy? policy, RecordingInvalidator? invalidator, InMemoryProfileStore? store})
       : factory = FakeTransportFactory(builds),
         lifecycle = ManualLifecycleSource(),
         invalidator = invalidator ?? RecordingInvalidator(),
-        store = InMemoryProfileStore() {
+        store = store ?? InMemoryProfileStore() {
     session = DockerSession(
       transportFactory: factory,
       policy: policy ?? ReconnectPolicy(jitter: 0),
       lifecycle: lifecycle,
       invalidator: this.invalidator,
-      profileStore: store,
+      profileStore: this.store,
       onEvent: events.add,
       onNewSession: () => newSessions++,
       onProfilesChanged: () => profileChanges++,
@@ -235,6 +263,138 @@ void main() {
         expect(h.s.profile!.id, 'b');
         expect(h.s.sessionId, 2);
         expect(h.newSessions, 2);
+      });
+    });
+
+    group('connect reports whether this attempt connected:', () {
+      /// Starts a connect; the returned reader gives what it reported, or null while it is in flight.
+      bool? Function() report(_Harness h, ConnectionProfile profile) {
+        bool? result;
+        h.session.connect(profile).then((v) => result = v);
+        return () => result;
+      }
+
+      test('true for a good connect', () {
+        fakeAsync((async) {
+          final h = _Harness([FakeDaemon().transport]);
+          final result = report(h, agentA);
+          async.flushMicrotasks();
+          expect(result(), isTrue);
+          expect(h.s.status, SessionStatus.connected);
+        });
+      });
+
+      test('false for a refused one, with the error in state', () {
+        fakeAsync((async) {
+          final h = _Harness([const DockerError(DockerErrorKind.network, 'refused')]);
+          final result = report(h, agentA);
+          async.flushMicrotasks();
+          expect(result(), isFalse);
+          expect(h.s.status, SessionStatus.disconnected);
+          expect(h.s.error!.message, 'refused');
+        });
+      });
+
+      test('false for a daemon that fails the probe', () {
+        fakeAsync((async) {
+          final h = _Harness([FakeDaemon(pingStatus: 401).transport]);
+          final result = report(h, agentA);
+          async.flushMicrotasks();
+          expect(result(), isFalse);
+          expect(h.s.error!.kind, DockerErrorKind.unauthorized);
+        });
+      });
+
+      test('false for a second call while the first is in flight, which still reports true', () {
+        fakeAsync((async) {
+          final pending = Completer<BuiltTransport>();
+          final h = _Harness([pending.future]);
+          final first = report(h, agentA);
+          final second = report(h, agentB);
+          async.flushMicrotasks();
+          expect(second(), isFalse); // ignored at once
+          expect(first(), isNull); // still in flight
+          pending.complete(BuiltTransport(FakeDaemon().transport));
+          async.flushMicrotasks();
+          expect(first(), isTrue);
+          expect(h.s.profile!.id, 'a');
+          expect(h.factory.builds, 1);
+        });
+      });
+
+      final lateHandshakes = <String, void Function(Completer<BuiltTransport>, FakeDaemon)>{
+        'answers': (pending, d) => pending.complete(BuiltTransport(d.transport)),
+        'fails': (pending, d) => pending.completeError(const DockerError(DockerErrorKind.timeout, 'timed out')),
+        'reports a changed host key': (pending, d) => pending.completeError(const HostKeyMismatchException('FP')),
+      };
+      for (final MapEntry(key: outcome, value: finish) in lateHandshakes.entries) {
+        test('false for an attempt cancelled by disconnect() whose handshake $outcome later', () {
+          fakeAsync((async) {
+            final pending = Completer<BuiltTransport>();
+            final d = FakeDaemon();
+            final h = _Harness([pending.future]);
+            bool? result;
+            Object? error;
+            h.session.connect(sshProfile(pin: 'FP-OLD')).then((v) {
+              result = v;
+            }, onError: (Object e) {
+              error = e;
+            });
+            async.flushMicrotasks();
+            h.session.disconnect();
+            async.flushMicrotasks();
+            expect(result, isNull); // its handshake is still out
+
+            finish(pending, d);
+            async.flushMicrotasks();
+            expect(result, isFalse);
+            expect(error, isNull);
+            expect(h.s.status, SessionStatus.disconnected);
+            expect(h.s.error, isNull);
+            if (outcome == 'answers') {
+              expect(d.transport.closed, isTrue);
+              expect(d.transport.calls, isEmpty);
+            }
+          });
+        });
+      }
+
+      test('false for an attempt cancelled while its probe is out; its transport is closed', () {
+        fakeAsync((async) {
+          final t = _HeldPing();
+          final h = _Harness([t]);
+          final result = report(h, agentA);
+          async.flushMicrotasks();
+          expect(h.s.status, SessionStatus.connecting);
+          h.session.disconnect();
+          async.flushMicrotasks();
+          t.answer.complete();
+          async.flushMicrotasks();
+          expect(result(), isFalse);
+          expect(h.s.status, SessionStatus.disconnected);
+          expect(t.closed, isTrue);
+        });
+      });
+
+      test('false for an attempt cancelled while its host key is being saved; its transport is closed', () {
+        fakeAsync((async) {
+          final d = FakeDaemon();
+          final store = _HeldUpdateStore();
+          final h = _Harness([BuiltTransport(d.transport, presentedHostKey: 'FP')], store: store);
+          store.add(sshProfile());
+          async.flushMicrotasks();
+          final result = report(h, sshProfile());
+          async.flushMicrotasks();
+          expect(h.s.status, SessionStatus.connecting); // the probe is done, the pin write is out
+          h.session.disconnect();
+          async.flushMicrotasks();
+          store.written.complete();
+          async.flushMicrotasks();
+          expect(result(), isFalse);
+          expect(h.s.status, SessionStatus.disconnected);
+          expect(d.transport.closed, isTrue);
+          expect(h.profileChanges, 0);
+        });
       });
     });
   });
