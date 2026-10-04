@@ -46,4 +46,54 @@ void main() {
     expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
     n.dispose();
   });
+
+  test('a retry that opens before any sample shows loading and clears the error', () async {
+    var opens = 0;
+    final t = FakeTransport()
+      ..onStream('/containers/a/stats', (_) {
+        opens++;
+        if (opens == 1) return Stream.error(DockerError.fromResponse(404, '{"message":"boom"}'));
+        return StreamController<List<int>>().stream; // open, no sample yet
+      });
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    await pumpEventQueue();
+    expect(n.state.status, StatsStatus.error);
+
+    n.retry();
+    await pumpEventQueue();
+    expect(n.state.status, StatsStatus.loading);
+    expect(n.state.error, isNull);
+    n.dispose();
+  });
+
+  test('the session coming back reopens a stream that had ended', () async {
+    final t = FakeTransport()
+      ..onStream('/containers/a/stats', (_) => Stream.value(utf8.encode('${_line(1000000)}\n')));
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    await pumpEventQueue();
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(1));
+
+    n.setLive(false);
+    n.setLive(true);
+    await pumpEventQueue();
+
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
+    expect(n.state.cpuHistory, hasLength(2)); // the history is kept and grows again
+    n.dispose();
+  });
+
+  test('the session coming back reopens a stream that had failed', () async {
+    final t = FakeTransport()
+      ..onStream('/containers/a/stats', (_) => Stream.error(DockerError.fromResponse(404, '{"message":"boom"}')));
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    await pumpEventQueue();
+    expect(n.state.status, StatsStatus.error);
+
+    n.setLive(false);
+    n.setLive(true);
+    await pumpEventQueue();
+
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
+    n.dispose();
+  });
 }

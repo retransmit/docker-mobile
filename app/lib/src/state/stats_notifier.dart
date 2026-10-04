@@ -86,7 +86,10 @@ class StatsNotifier extends StateNotifier<StatsState> {
       case SupervisorStatus.failed:
         state = state.copyWith(status: StatsStatus.error, error: error);
       case SupervisorStatus.streaming:
-        if (state.latest != null) state = state.copyWith(status: StatsStatus.streaming, clearError: true);
+        state = state.copyWith(
+          status: state.latest == null ? StatsStatus.loading : StatsStatus.streaming,
+          clearError: true,
+        );
       case SupervisorStatus.idle:
       case SupervisorStatus.done:
         break;
@@ -98,10 +101,16 @@ class StatsNotifier extends StateNotifier<StatsState> {
   void setLive(bool live) {
     if (live == _live) return;
     _live = live;
-    if (live) {
-      _supervisor.resume();
-    } else {
+    if (!live) {
       _supervisor.pause();
+      return;
+    }
+    final s = _supervisor.status;
+    if (s == SupervisorStatus.done || s == SupervisorStatus.failed) {
+      // Ended or gave up earlier: try again now that the session is back.
+      _supervisor.retry();
+    } else {
+      _supervisor.resume();
     }
   }
 

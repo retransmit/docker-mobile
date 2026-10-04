@@ -168,8 +168,9 @@ class LogsNotifier extends StateNotifier<LogsState> {
   /// Runs the stream only while the session is live and the user follows.
   void _sync() {
     if (_live && state.following) {
-      if (_supervisor.status == SupervisorStatus.done) {
-        // Ended earlier (the container stopped): look again from the cursor.
+      final s = _supervisor.status;
+      if (s == SupervisorStatus.done || s == SupervisorStatus.failed) {
+        // Ended or gave up earlier: look again from the cursor.
         _supervisor.retry();
       } else {
         _supervisor.resume();

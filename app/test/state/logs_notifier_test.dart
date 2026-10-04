@@ -337,4 +337,48 @@ void main() {
     expect(n.state.status, LogsStatus.idle);
     n.dispose();
   });
+
+  /// A log stream whose first open fails with a 404 (not retryable); every
+  /// later open sends one line and ends.
+  FakeTransport failingOnceFake() {
+    var count = 0;
+    return FakeTransport()
+      ..onStream('/containers/a/logs', (_) {
+        count++;
+        if (count == 1) return Stream.error(DockerError.fromResponse(404, '{"message":"gone"}'));
+        return Stream.value(frame(1, utf8.encode('${ts(1)} back\n')));
+      });
+  }
+
+  test('play after the stream failed reopens it', () async {
+    final t = failingOnceFake();
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    expect(n.state.status, LogsStatus.error);
+
+    n.setFollowing(false);
+    n.setFollowing(true);
+    await pumpEventQueue();
+
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
+    expect(n.state.lines.map((l) => l.text), ['back']);
+    expect(n.state.status, LogsStatus.idle);
+    n.dispose();
+  });
+
+  test('the session coming back reopens a stream that had failed', () async {
+    final t = failingOnceFake();
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    expect(n.state.status, LogsStatus.error);
+
+    n.setLive(false);
+    n.setLive(true);
+    await pumpEventQueue();
+
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
+    expect(n.state.lines.map((l) => l.text), ['back']);
+    expect(n.state.status, LogsStatus.idle);
+    n.dispose();
+  });
 }
