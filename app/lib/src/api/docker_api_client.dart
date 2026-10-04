@@ -73,17 +73,40 @@ class DockerApiClient {
   Stream<List<int>> _postStream(String path, {Map<String, String>? query, Object? body}) =>
       _wrapErrors(() => transport.postStream(_p(path), query: query, body: body));
 
-  /// Re-raises anything the transport emits as a [DockerError]. Cancelling the
-  /// returned stream cancels the source at the source's next event (an async*
-  /// generator suspended at an await cannot be cancelled earlier).
-  Stream<List<int>> _wrapErrors(Stream<List<int>> Function() open) async* {
+  /// Re-raises anything the transport emits as a [DockerError]. Built from
+  /// stream operators, not an async* generator, so cancelling the returned
+  /// stream cancels the transport stream immediately. A synchronous throw
+  /// from the transport becomes an error event.
+  Stream<List<int>> _wrapErrors(Stream<List<int>> Function() open) {
+    final Stream<List<int>> source;
     try {
-      final source = open();
-      await for (final chunk in source) {
-        yield chunk;
-      }
+      source = open();
     } catch (e, st) {
-      Error.throwWithStackTrace(DockerError.wrap(e), st);
+      return Stream<List<int>>.error(DockerError.wrap(e), st);
+    }
+    return source.handleError(
+      (Object e, StackTrace st) => Error.throwWithStackTrace(DockerError.wrap(e), st),
+    );
+  }
+
+  /// Splits an NDJSON byte stream into parsed values, skipping blank and
+  /// malformed lines. A trailing line without a newline is still parsed when
+  /// the stream ends. Cancelling the result cancels [raw] immediately.
+  static Stream<T> _ndjson<T>(Stream<List<int>> raw, T? Function(String line) parse) => raw
+      .transform(const Utf8Decoder(allowMalformed: true))
+      .transform(const LineSplitter())
+      .expand((line) {
+        final value = parse(line);
+        return value == null ? <T>[] : <T>[value];
+      });
+
+  static T? _parseJson<T>(String line, T Function(Map<String, dynamic>) fromJson) {
+    final t = line.trim();
+    if (t.isEmpty) return null;
+    try {
+      return fromJson(jsonDecode(t) as Map<String, dynamic>);
+    } catch (_) {
+      return null; // skip a malformed line
     }
   }
 
@@ -250,24 +273,8 @@ class DockerApiClient {
     return (jsonDecode(resp.body) as List).map((e) => ImageHistoryLayer.fromJson(e as Map<String, dynamic>)).toList();
   }
 
-  Stream<PullEvent> pullImage(String image, {String tag = 'latest'}) async* {
-    final raw = _postStream('/images/create', query: {'fromImage': image, 'tag': tag});
-    final buffer = <int>[]; // buffer BYTES so a multi-byte UTF-8 char split across chunks survives
-    await for (final chunk in raw) {
-      buffer.addAll(chunk);
-      var nl = buffer.indexOf(0x0A);
-      while (nl != -1) {
-        final ev = _parsePullLine(utf8.decode(buffer.sublist(0, nl), allowMalformed: true));
-        buffer.removeRange(0, nl + 1);
-        if (ev != null) yield ev;
-        nl = buffer.indexOf(0x0A);
-      }
-    }
-    if (buffer.isNotEmpty) {
-      final ev = _parsePullLine(utf8.decode(buffer, allowMalformed: true));
-      if (ev != null) yield ev;
-    }
-  }
+  Stream<PullEvent> pullImage(String image, {String tag = 'latest'}) =>
+      _ndjson(_postStream('/images/create', query: {'fromImage': image, 'tag': tag}), _parsePullLine);
 
   PullEvent? _parsePullLine(String line) {
     final t = line.trim();
@@ -425,45 +432,13 @@ class DockerApiClient {
     if (includeVolumes) await pruneVolumes();
   }
 
-  Stream<ContainerStats> streamContainerStats(String id) async* {
-    final raw = _stream('/containers/$id/stats', query: {'stream': 'true'});
-    final buffer = <int>[];
-    await for (final chunk in raw) {
-      buffer.addAll(chunk);
-      var nl = buffer.indexOf(0x0A);
-      while (nl != -1) {
-        final line = utf8.decode(buffer.sublist(0, nl), allowMalformed: true).trim();
-        buffer.removeRange(0, nl + 1);
-        if (line.isNotEmpty) {
-          try {
-            yield ContainerStats.fromJson(jsonDecode(line) as Map<String, dynamic>);
-          } catch (_) {
-            // skip a malformed/partial line
-          }
-        }
-        nl = buffer.indexOf(0x0A);
-      }
-    }
-  }
+  Stream<ContainerStats> streamContainerStats(String id) => _ndjson(
+        _stream('/containers/$id/stats', query: {'stream': 'true'}),
+        (line) => _parseJson(line, ContainerStats.fromJson),
+      );
 
-  Stream<DockerEvent> streamEvents({String? since}) async* {
-    final raw = _stream('/events', query: since == null ? null : {'since': since});
-    final buffer = <int>[];
-    await for (final chunk in raw) {
-      buffer.addAll(chunk);
-      var nl = buffer.indexOf(0x0A);
-      while (nl != -1) {
-        final line = utf8.decode(buffer.sublist(0, nl), allowMalformed: true).trim();
-        buffer.removeRange(0, nl + 1);
-        if (line.isNotEmpty) {
-          try {
-            yield DockerEvent.fromJson(jsonDecode(line) as Map<String, dynamic>);
-          } catch (_) {
-            // skip a malformed/partial line
-          }
-        }
-        nl = buffer.indexOf(0x0A);
-      }
-    }
-  }
+  Stream<DockerEvent> streamEvents({String? since}) => _ndjson(
+        _stream('/events', query: since == null ? null : {'since': since}),
+        (line) => _parseJson(line, DockerEvent.fromJson),
+      );
 }
