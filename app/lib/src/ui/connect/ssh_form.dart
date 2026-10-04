@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
-import '../route_is_open.dart';
 import '../widgets/app_text_field.dart';
+import 'profile_form_save.dart';
 
 class SshForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -14,7 +13,7 @@ class SshForm extends ConsumerStatefulWidget {
   ConsumerState<SshForm> createState() => _SshFormState();
 }
 
-class _SshFormState extends ConsumerState<SshForm> {
+class _SshFormState extends ConsumerState<SshForm> with ProfileFormSave<SshForm> {
   final _name = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController(text: '22');
@@ -24,7 +23,6 @@ class _SshFormState extends ConsumerState<SshForm> {
   final _passphrase = TextEditingController();
   SshAuthMethod _authMethod = SshAuthMethod.password;
   String? _pinnedHostKey;
-  bool _saving = false;
 
   @override
   void initState() {
@@ -58,7 +56,11 @@ class _SshFormState extends ConsumerState<SshForm> {
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  ConnectionProfile? _build() {
+  @override
+  bool get isEditing => widget.editing != null;
+
+  @override
+  ConnectionProfile? buildProfile() {
     final name = _name.text.trim();
     final host = _host.text.trim();
     final port = int.tryParse(_port.text.trim());
@@ -89,46 +91,6 @@ class _SshFormState extends ConsumerState<SshForm> {
     );
   }
 
-  Future<void> _persist(ConnectionProfile p) async {
-    final store = ref.read(profileStoreProvider);
-    widget.editing == null ? await store.add(p) : await store.update(p);
-    ref.invalidate(profilesProvider);
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-    final p = _build();
-    if (p == null) return;
-    final navigator = Navigator.of(context);
-    await _persistOnce(p);
-    if (!mounted || !routeIsOpen(context)) return;
-    navigator.pop();
-  }
-
-  /// Saves and returns the profile to the Connections list, which connects
-  /// and shows the progress or the error.
-  Future<void> _saveAndConnect() async {
-    if (_saving) return;
-    final p = _build();
-    if (p == null) return;
-    final navigator = Navigator.of(context);
-    await _persistOnce(p);
-    if (!mounted || !routeIsOpen(context)) return;
-    navigator.pop(p);
-  }
-
-  /// Saves [p]; further taps are ignored from here on (the editor is closing).
-  /// A failed save lets the user try again and rethrows.
-  Future<void> _persistOnce(ConnectionProfile p) async {
-    _saving = true;
-    try {
-      await _persist(p);
-    } catch (_) {
-      _saving = false;
-      rethrow;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -148,16 +110,16 @@ class _SshFormState extends ConsumerState<SshForm> {
           onSelectionChanged: (s) => setState(() => _authMethod = s.first),
         ),
         if (_authMethod == SshAuthMethod.password)
-          AppTextField(key: const ValueKey('ssh-password'), controller: _password, label: 'Password', icon: Icons.lock, obscure: true, last: true, onSubmit: _saveAndConnect)
+          AppTextField(key: const ValueKey('ssh-password'), controller: _password, label: 'Password', icon: Icons.lock, obscure: true, last: true, onSubmit: saveAndConnect)
         else ...[
           AppTextField(key: const ValueKey('ssh-key'), controller: _key, label: 'Private key (PEM)', icon: Icons.vpn_key, maxLines: 4),
-          AppTextField(key: const ValueKey('ssh-passphrase'), controller: _passphrase, label: 'Passphrase (optional)', icon: Icons.password, obscure: true, last: true, onSubmit: _saveAndConnect),
+          AppTextField(key: const ValueKey('ssh-passphrase'), controller: _passphrase, label: 'Passphrase (optional)', icon: Icons.password, obscure: true, last: true, onSubmit: saveAndConnect),
         ],
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: OutlinedButton(onPressed: _save, child: const Text('Save'))),
+          Expanded(child: OutlinedButton(onPressed: save, child: const Text('Save'))),
           const SizedBox(width: 8),
-          Expanded(child: FilledButton(onPressed: _saveAndConnect, child: const Text('Save & Connect'))),
+          Expanded(child: FilledButton(onPressed: saveAndConnect, child: const Text('Save & Connect'))),
         ]),
       ],
     );

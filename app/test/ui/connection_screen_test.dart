@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/state/providers.dart';
+import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 import 'package:docker_mobile/src/ui/connection_screen.dart';
 
@@ -15,9 +16,20 @@ Widget _wrap(ProfileStore store) => ProviderScope(
       child: const MaterialApp(home: ConnectionScreen()),
     );
 
-/// Opens the editor from a host route that keeps whatever the editor returns.
+/// One saved profile of every kind, for the editing tests.
+const _existing = <ConnectionKind, ConnectionProfile>{
+  ConnectionKind.agent: ConnectionProfile(id: 'e', name: 'old', kind: ConnectionKind.agent,
+      agent: AgentCredentials(baseUri: 'http://10.0.0.9:8080', token: 't')),
+  ConnectionKind.tls: ConnectionProfile(id: 'e', name: 'old', kind: ConnectionKind.tls,
+      tls: TlsCredentials(host: '10.0.0.9', port: 2376, clientCertPem: 'cert', clientKeyPem: 'key')),
+  ConnectionKind.ssh: ConnectionProfile(id: 'e', name: 'old', kind: ConnectionKind.ssh,
+      ssh: SshCredentials(host: '10.0.0.9', port: 22, username: 'root', authMethod: SshAuthMethod.password, password: 'pw')),
+};
+
+/// Opens the editor (on [editing], if given) from a host route that keeps
+/// whatever the editor returns.
 Future<({StubSession stub, List<ConnectionProfile?> results})> _openFromHost(
-    WidgetTester tester, ProfileStore store) async {
+    WidgetTester tester, ProfileStore store, {ConnectionProfile? editing}) async {
   final stub = StubSession(const SessionState());
   final results = <ConnectionProfile?>[];
   await tester.pumpWidget(ProviderScope(
@@ -30,7 +42,7 @@ Future<({StubSession stub, List<ConnectionProfile?> results})> _openFromHost(
         builder: (context) => Scaffold(
           body: TextButton(
             onPressed: () async => results.add(await Navigator.of(context)
-                .push<ConnectionProfile>(MaterialPageRoute(builder: (_) => const ConnectionScreen()))),
+                .push<ConnectionProfile>(MaterialPageRoute(builder: (_) => ConnectionScreen(editing: editing)))),
             child: const Text('open'),
           ),
         ),
@@ -175,29 +187,50 @@ void main() {
         expect(host.results.single, isNull); // closed, not finished: nothing is handed back
       });
     }
-  }
 
-  testWidgets('a failed save keeps the editor open and can be tried again', (tester) async {
-    final store = _FailingOnceStore();
-    final host = await _openFromHost(tester, store);
-    final button = await _fill(tester, ConnectionKind.agent, button: 'Save & Connect');
+    testWidgets('saving an edited profile updates it in place (${kind.name})', (tester) async {
+      final store = InMemoryProfileStore();
+      await store.add(_existing[kind]!);
+      final host = await _openFromHost(tester, store, editing: _existing[kind]);
+      await tester.enterText(find.widgetWithText(TextField, 'Name'), 'renamed');
+      await tester.pumpAndSettle(); // let the field finish scrolling its caret into view first
+      final button = find.widgetWithText(FilledButton, 'Save & Connect');
+      await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
+      await tester.tap(button);
+      await tester.pumpAndSettle();
 
-    // The save error is not handled by the form; catch it here so it does not end the test.
-    Object? thrown;
-    await runZonedGuarded(() => tester.tap(button), (e, _) {
-      thrown = e;
+      final stored = await store.list();
+      expect(stored, hasLength(1)); // updated, not added
+      expect(stored.single.id, 'e');
+      expect(stored.single.name, 'renamed');
+      expect(stored.single.kind, kind);
+      expect(host.results.single, same(stored.single));
     });
-    await tester.pumpAndSettle();
-    expect(thrown, isStateError);
-    expect(find.byType(ConnectionScreen), findsOneWidget);
-    expect(await store.list(), isEmpty);
-    expect(host.results, isEmpty);
 
-    await tester.tap(button);
-    await tester.pumpAndSettle();
-    final stored = await store.list();
-    expect(stored, hasLength(1));
-    expect(find.byType(ConnectionScreen), findsNothing);
-    expect(host.results.single, same(stored.single));
-  });
+    testWidgets('a failed save keeps the editor open and can be tried again (${kind.name})', (tester) async {
+      final store = _FailingOnceStore();
+      final host = await _openFromHost(tester, store);
+      final button = await _fill(tester, kind, button: 'Save & Connect');
+
+      // The save error is not handled by the form; catch it here so it does not end the test.
+      Object? thrown;
+      await runZonedGuarded(() => tester.tap(button), (e, _) {
+        thrown = e;
+      });
+      await tester.pumpAndSettle();
+      expect(thrown, isStateError);
+      expect(find.byType(ConnectionScreen), findsOneWidget);
+      expect(await store.list(), isEmpty);
+      expect(host.results, isEmpty);
+
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      final stored = await store.list();
+      expect(stored, hasLength(1));
+      expect(stored.single.kind, kind);
+      expect(find.byType(ConnectionScreen), findsNothing);
+      expect(host.results.single, same(stored.single));
+    });
+  }
 }
