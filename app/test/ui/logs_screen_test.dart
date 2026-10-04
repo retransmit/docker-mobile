@@ -85,4 +85,20 @@ void main() {
     expect(opens(), hasLength(3));
     expect(opens().last.query!['tail'], 'all');
   });
+
+  testWidgets('a failed first inspect shows the error banner with Retry', (tester) async {
+    final t = FakeTransport()
+      ..onGet('/containers/a/json', (_) => http.Response('{"message":"No such container: a"}', 404));
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MaterialBanner), findsOneWidget);
+    expect(find.text('No such container: a'), findsOneWidget);
+    expect(t.calls.where((c) => c.method == 'STREAM'), isEmpty); // no body, so no log stream
+
+    await tester.tap(find.widgetWithText(TextButton, 'Retry'));
+    await tester.pumpAndSettle();
+    expect(t.calls.where((c) => c.method == 'GET'), hasLength(2)); // Retry asks the daemon again
+    expect(find.byType(MaterialBanner), findsOneWidget);
+  });
 }
