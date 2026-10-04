@@ -274,17 +274,7 @@ class DockerApiClient {
   }
 
   Stream<PullEvent> pullImage(String image, {String tag = 'latest'}) =>
-      _ndjson(_postStream('/images/create', query: {'fromImage': image, 'tag': tag}), _parsePullLine);
-
-  PullEvent? _parsePullLine(String line) {
-    final t = line.trim();
-    if (t.isEmpty) return null;
-    try {
-      return PullEvent.fromJson(jsonDecode(t) as Map<String, dynamic>);
-    } catch (_) {
-      return null; // skip a fragment that isn't a complete JSON object
-    }
-  }
+      _ndjson(_postStream('/images/create', query: {'fromImage': image, 'tag': tag}), (line) => _parseJson(line, PullEvent.fromJson));
 
   Future<void> tagImage(String id, {required String repo, String tag = 'latest'}) async =>
       _ensure(await _post('/images/$id/tag', query: {'repo': repo, 'tag': tag}), ok: const {201});
