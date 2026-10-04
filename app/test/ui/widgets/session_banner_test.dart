@@ -17,6 +17,14 @@ Future<StubSession> pumpBanner(WidgetTester tester, SessionState s) async {
   return stub;
 }
 
+/// Runs a route transition to its end. The reconnecting strip's spinner never
+/// settles, so `pumpAndSettle` cannot be used while it shows.
+Future<void> pumpTransition(WidgetTester tester) async {
+  await tester.pump(); // the transition starts
+  await tester.pump(const Duration(milliseconds: 600)); // and ends (the default one takes 450 ms)
+  await tester.pump(); // the navigator hides or drops the route underneath
+}
+
 void main() {
   testWidgets('hidden while connected', (tester) async {
     await pumpBanner(tester, const SessionState(status: SessionStatus.connected));
@@ -43,21 +51,82 @@ void main() {
     expect(stub.disconnects, 1);
   });
 
-  testWidgets('a long failure message is cut short, so the strip stays small on a narrow screen', (tester) async {
+  testWidgets('on a narrow screen a long failure message gets three full-width lines above the buttons', (tester) async {
     tester.view.physicalSize = const Size(360, 640);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
-    final message = 'Cannot reach the daemon: ${'no route to host, ' * 12}giving up'; // longer than any clipped error
-    final stub = await pumpBanner(tester, SessionState(
+    final stub = await pumpBanner(tester, const SessionState(
       status: SessionStatus.failed,
-      error: DockerError(DockerErrorKind.network, message),
+      error: DockerError(DockerErrorKind.network, 'short'),
     ));
-    expect(find.text(message), findsOneWidget);
-    expect(tester.getSize(find.byType(SessionBanner)).height, lessThanOrEqualTo(120));
-    // Both actions are still on screen and work.
+    final lineHeight = tester.getSize(find.text('short')).height;
+
+    final message = 'Cannot reach the daemon: ${'no route to host, ' * 12}giving up'; // longer than any clipped error
+    stub.setState(SessionState(status: SessionStatus.failed, error: DockerError(DockerErrorKind.network, message)));
+    await tester.pump();
+    final text = tester.getRect(find.text(message));
+    final retry = tester.getRect(find.widgetWithText(TextButton, 'Retry'));
+    final disconnect = tester.getRect(find.widgetWithText(TextButton, 'Disconnect'));
+
+    // The message has the strip's width to itself (icon and paddings aside) and stops after three lines.
+    expect(text.width, 360 - 16 - 24 - 12 - 8 - 8);
+    expect(text.height, closeTo(3 * lineHeight, 0.5));
+    expect(tester.getRect(find.byIcon(Icons.cloud_off)).top, text.top);
+    // The buttons sit in a row of their own underneath, at the right edge.
+    expect(retry.top, greaterThanOrEqualTo(text.bottom));
+    expect(disconnect.top, retry.top);
+    expect(retry.right, lessThanOrEqualTo(disconnect.left));
+    expect(disconnect.right, 360 - 8);
+    expect(tester.getSize(find.byType(SessionBanner)).height, lessThan(150));
+
+    final scheme = Theme.of(tester.element(find.byType(SessionBanner))).colorScheme;
+    for (final label in ['Retry', 'Disconnect']) {
+      final style = tester.widget<TextButton>(find.widgetWithText(TextButton, label)).style!;
+      expect(style.foregroundColor!.resolve(<WidgetState>{}), scheme.onErrorContainer, reason: label);
+    }
+    // Both actions are on screen and work.
     await tester.tap(find.text('Retry'));
     expect(stub.retries, 1);
     expect(find.text('Disconnect').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('the failed strip without an error reads Connection lost', (tester) async {
+    await pumpBanner(tester, const SessionState(status: SessionStatus.failed));
+    expect(find.text('Connection lost'), findsOneWidget);
+  });
+
+  testWidgets('the banner shows nothing while disconnected, connecting or connected', (tester) async {
+    final stub = await pumpBanner(tester, const SessionState(status: SessionStatus.failed));
+    expect(tester.getSize(find.byType(SessionBanner)).height, greaterThan(0));
+    for (final status in [SessionStatus.disconnected, SessionStatus.connecting, SessionStatus.connected]) {
+      stub.setState(SessionState(status: status));
+      await tester.pump();
+      expect(tester.getSize(find.byType(SessionBanner)), Size.zero, reason: status.name);
+      expect(
+        find.descendant(of: find.byType(SessionBanner), matching: find.byType(Text)),
+        findsNothing,
+        reason: status.name,
+      );
+    }
+  });
+
+  testWidgets('the reconnecting strip offers Disconnect, which reaches the session', (tester) async {
+    final stub = await pumpBanner(tester, const SessionState(status: SessionStatus.reconnecting, attempt: 1));
+    final button = find.widgetWithText(TextButton, 'Disconnect');
+    expect(button, findsOneWidget);
+    expect(find.text('Retry'), findsNothing); // the session is already retrying
+    final scheme = Theme.of(tester.element(button)).colorScheme;
+    expect(
+      tester.widget<TextButton>(button).style!.foregroundColor!.resolve(<WidgetState>{}),
+      scheme.onSecondaryContainer,
+    );
+    // The strip is only as tall as the button needs.
+    expect(tester.getSize(find.byType(SessionBanner)).height, tester.getSize(button).height + 4);
+
+    await tester.tap(button);
+    await tester.pump();
+    expect(stub.disconnects, 1);
+    expect(stub.retries, 0);
   });
 
   testWidgets('showsFor says for every status whether the banner draws anything', (tester) async {
@@ -99,6 +168,29 @@ void main() {
 
     await tester.tap(find.text('Disconnect'));
     await tester.pumpAndSettle();
+    expect(find.text('first'), findsOneWidget);
+    expect(find.text('second'), findsNothing);
+    expect(stub.disconnects, 1);
+  });
+
+  testWidgets('through the host the reconnecting strip disconnects from a pushed route too', (tester) async {
+    final key = GlobalKey<NavigatorState>();
+    final stub = StubSession(const SessionState(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: MaterialApp(
+        navigatorKey: key,
+        builder: (context, child) => SessionBannerHost(navigatorKey: key, child: child!),
+        home: const Scaffold(body: Text('first')),
+      ),
+    ));
+    key.currentState!.push(MaterialPageRoute<void>(builder: (_) => const Scaffold(body: Text('second'))));
+    await pumpTransition(tester);
+    expect(find.text('second'), findsOneWidget);
+    expect(find.text('first'), findsNothing);
+
+    await tester.tap(find.text('Disconnect'));
+    await pumpTransition(tester);
     expect(find.text('first'), findsOneWidget);
     expect(find.text('second'), findsNothing);
     expect(stub.disconnects, 1);

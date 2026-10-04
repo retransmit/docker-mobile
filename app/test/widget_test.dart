@@ -69,4 +69,24 @@ void main() {
     expect(find.byType(ProfilesScreen), findsOneWidget);
     expect(stub.disconnects, 1);
   });
+
+  testWidgets('the app banner offers Disconnect while it is still reconnecting', (tester) async {
+    final stub = StubSession(const SessionState(status: SessionStatus.failed));
+    await _pumpApp(tester, overrides: [sessionProvider.overrideWith((ref) => stub)]);
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
+
+    // Retry puts the session back to reconnecting; its spinner never settles, so pump by hand from here.
+    stub.setState(const SessionState(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump();
+    expect(find.text('Retry'), findsNothing);
+    await tester.tap(find.text('Disconnect'));
+    await tester.pump(); // the pop starts
+    await tester.pump(const Duration(milliseconds: 600)); // and ends
+    await tester.pump(); // the navigator drops the popped route
+    expect(find.byType(SettingsScreen), findsNothing);
+    expect(find.byType(ProfilesScreen), findsOneWidget);
+    expect(stub.disconnects, 1);
+  });
 }

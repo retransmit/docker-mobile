@@ -14,7 +14,10 @@ class SessionBanner extends ConsumerWidget {
   final GlobalKey<NavigatorState>? navigatorKey;
 
   /// Whether the banner shows anything for [status].
-  static bool showsFor(SessionStatus status) => status == SessionStatus.reconnecting || status == SessionStatus.failed;
+  static bool showsFor(SessionStatus status) => switch (status) {
+        SessionStatus.reconnecting || SessionStatus.failed => true,
+        SessionStatus.disconnected || SessionStatus.connecting || SessionStatus.connected => false,
+      };
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -28,7 +31,7 @@ class SessionBanner extends ConsumerWidget {
           child: SafeArea(
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.fromLTRB(16, 2, 8, 2),
               child: Row(
                 children: [
                   const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
@@ -38,6 +41,11 @@ class SessionBanner extends ConsumerWidget {
                       'Reconnecting... (attempt $attempt of $max)',
                       style: TextStyle(color: scheme.onSecondaryContainer),
                     ),
+                  ),
+                  TextButton(
+                    style: TextButton.styleFrom(foregroundColor: scheme.onSecondaryContainer),
+                    onPressed: () => disconnect(context, ref, navigator: navigatorKey?.currentState),
+                    child: const Text('Disconnect'),
                   ),
                 ],
               ),
@@ -50,26 +58,41 @@ class SessionBanner extends ConsumerWidget {
           child: SafeArea(
             bottom: false,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-              child: Row(
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.cloud_off, color: scheme.onErrorContainer),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      error?.message ?? 'Connection lost',
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: scheme.onErrorContainer),
-                    ),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.cloud_off, color: scheme.onErrorContainer),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          error?.message ?? 'Connection lost',
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: scheme.onErrorContainer),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                   ),
-                  TextButton(
-                    onPressed: () => ref.read(sessionProvider.notifier).retry(),
-                    child: const Text('Retry'),
-                  ),
-                  TextButton(
-                    onPressed: () => disconnect(context, ref, navigator: navigatorKey?.currentState),
-                    child: const Text('Disconnect'),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TextButton(
+                        style: TextButton.styleFrom(foregroundColor: scheme.onErrorContainer),
+                        onPressed: () => ref.read(sessionProvider.notifier).retry(),
+                        child: const Text('Retry'),
+                      ),
+                      TextButton(
+                        style: TextButton.styleFrom(foregroundColor: scheme.onErrorContainer),
+                        onPressed: () => disconnect(context, ref, navigator: navigatorKey?.currentState),
+                        child: const Text('Disconnect'),
+                      ),
+                    ],
                   ),
                 ],
               ),
