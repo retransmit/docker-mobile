@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/docker_api_client.dart';
@@ -15,7 +16,7 @@ void main() {
     final lines = '${[for (var i = 0; i < kStatsWindow + 5; i++) _line((i + 1) * 1000000)].join('\n')}\n';
     final client = DockerApiClient(
         FakeTransport()..onStream('/containers/a/stats', (_) => Stream.value(utf8.encode(lines))));
-    final n = StatsNotifier(client, 'a');
+    final n = StatsNotifier(() => client, 'a');
     await pumpEventQueue();
     expect(n.state.status, StatsStatus.streaming);
     expect(n.state.latest, isNotNull);
@@ -26,11 +27,23 @@ void main() {
 
   test('a stream error sets error status', () async {
     final client = DockerApiClient(
-        FakeTransport()..onStream('/containers/a/stats', (_) => Stream.error(Exception('boom'))));
-    final n = StatsNotifier(client, 'a');
+        FakeTransport()..onStream('/containers/a/stats', (_) => Stream.error(DockerError.fromResponse(404, '{"message":"boom"}'))));
+    final n = StatsNotifier(() => client, 'a');
     await pumpEventQueue();
     expect(n.state.status, StatsStatus.error);
-    expect(n.state.error, contains('boom'));
+    expect(n.state.error!.message, 'boom');
+    n.dispose();
+  });
+
+  test('setLive(false) shows reconnecting; setLive(true) reopens the stream', () async {
+    final t = FakeTransport()..onStream('/containers/a/stats', (_) => StreamController<List<int>>().stream);
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    await pumpEventQueue();
+    n.setLive(false);
+    expect(n.state.status, StatsStatus.reconnecting);
+    n.setLive(true);
+    await pumpEventQueue();
+    expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
     n.dispose();
   });
 }

@@ -44,6 +44,12 @@ class SessionState {
 
   bool get isLive => status == SessionStatus.connected && foreground;
 
+  /// Streams may run: in the foreground and not reconnecting or failed.
+  /// (Disconnected counts as usable so screens driven by an overridden
+  /// transport in tests stream normally.)
+  bool get streamsUsable =>
+      foreground && status != SessionStatus.reconnecting && status != SessionStatus.failed;
+
   SessionState copyWith({
     SessionStatus? status,
     ConnectionProfile? profile,

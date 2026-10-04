@@ -66,11 +66,14 @@ void main() {
 
   testWidgets('a failing stats stream renders an ErrorView with Retry', (tester) async {
     await tester.pumpWidget(_wrap(FakeTransport()
-      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(500, '{"message":"boom"}')))));
+      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(404, '{"message":"boom"}')))));
     await tester.pumpAndSettle();
 
     expect(find.byType(ErrorView), findsOneWidget);
     expect(find.text('boom'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+    await tester.tap(find.text('Retry'));
+    await tester.pumpAndSettle();
+    expect(find.byType(ErrorView), findsOneWidget); // the same 404 again, after a real reopen
   });
 }

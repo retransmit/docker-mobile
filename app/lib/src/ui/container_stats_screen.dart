@@ -44,7 +44,7 @@ class ContainerStatsScreen extends ConsumerWidget {
       return ErrorView(
         key: const ValueKey('error'),
         error: s.error ?? 'Stats stream failed',
-        onRetry: () => ref.invalidate(statsProvider(containerId)),
+        onRetry: () => ref.read(statsProvider(containerId).notifier).retry(),
       );
     }
     final latest = s.latest;
@@ -53,6 +53,11 @@ class ContainerStatsScreen extends ConsumerWidget {
       key: const ValueKey('data'),
       padding: const EdgeInsets.all(16),
       children: [
+        if (s.status == StatsStatus.reconnecting)
+          const Padding(
+            padding: EdgeInsets.only(bottom: 12),
+            child: Text('Reconnecting...'),
+          ),
         _chartCard(context, 'CPU', '${latest.cpuPercent.toStringAsFixed(1)} %', null, s.cpuHistory, _cpuMaxY(s.cpuHistory)),
         const SizedBox(height: 12),
         _chartCard(

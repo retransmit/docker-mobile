@@ -19,6 +19,15 @@ void main() {
     expect(s.copyWith(status: SessionStatus.reconnecting).isLive, isFalse);
   });
 
+  test('streamsUsable is true in the foreground unless reconnecting or failed', () {
+    const s = SessionState(status: SessionStatus.connected);
+    expect(s.streamsUsable, isTrue);
+    expect(s.copyWith(status: SessionStatus.disconnected).streamsUsable, isTrue);
+    expect(s.copyWith(status: SessionStatus.reconnecting).streamsUsable, isFalse);
+    expect(s.copyWith(status: SessionStatus.failed).streamsUsable, isFalse);
+    expect(s.copyWith(foreground: false).streamsUsable, isFalse);
+  });
+
   test('copyWith keeps fields unless told, and clears error and warning on request', () {
     const err = DockerError(DockerErrorKind.network, 'down');
     final s = const SessionState().copyWith(error: err, warning: 'old', attempt: 2, apiVersion: '1.45', sessionId: 3);

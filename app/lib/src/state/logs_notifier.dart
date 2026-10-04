@@ -7,11 +7,14 @@ import '../api/docker_api_client.dart';
 import '../api/models/container_inspect.dart';
 import '../api/models/log_line.dart';
 import '../api/stdcopy.dart';
+import '../api/timestamps.dart';
+import '../session/reconnect_policy.dart';
 import 'providers.dart';
+import 'stream_supervisor.dart';
 
 const int kLogBufferCap = 5000;
 
-enum LogsStatus { streaming, paused, idle, error }
+enum LogsStatus { streaming, paused, idle, reconnecting, error }
 
 class LogsState {
   final List<LogLine> lines;
@@ -62,31 +65,44 @@ class LogsState {
 }
 
 class LogsNotifier extends StateNotifier<LogsState> {
-  final DockerApiClient _client;
+  final DockerApiClient? Function() _client;
   final String _id;
   final bool _tty;
-  StreamSubscription<LogChunk>? _sub;
+  late final StreamSupervisor<LogChunk> _supervisor;
   final Map<LogStream, String> _partial = {};
   final List<LogLine> _buf = <LogLine>[];
 
-  LogsNotifier(this._client, this._id, this._tty) : super(const LogsState()) {
-    _start();
+  /// Epoch nanoseconds of the newest line received; the resume point.
+  int? _cursor;
+
+  /// Lines at or before this are repeats from an inclusive `since`.
+  int? _floor;
+  bool _live = true;
+
+  LogsNotifier(this._client, this._id, this._tty, {ReconnectPolicy? policy}) : super(const LogsState()) {
+    _supervisor = StreamSupervisor<LogChunk>(
+      open: _open,
+      onData: _onChunk,
+      onStatus: _onStatus,
+      policy: policy,
+    );
+    _supervisor.start();
   }
 
-  void _start() {
-    _sub?.cancel();
+  Stream<LogChunk> _open() {
+    final client = _client();
+    if (client == null) throw const DockerError(DockerErrorKind.unknown, 'Not connected');
     _partial.clear();
-    _buf.clear();
-    state = state.copyWith(lines: _buf, status: LogsStatus.streaming, clearError: true);
-    _sub = _client
-        .streamContainerLogs(
-          _id,
-          tty: _tty,
-          follow: state.following,
-          tail: state.tail,
-          timestamps: state.timestamps,
-        )
-        .listen(_onChunk, onError: _onError, onDone: _onDone, cancelOnError: true);
+    final cursor = _cursor;
+    _floor = cursor;
+    return client.streamContainerLogs(
+      _id,
+      tty: _tty,
+      follow: state.following,
+      tail: cursor == null ? state.tail : null,
+      timestamps: true,
+      since: cursor == null ? null : formatUnixNanos(cursor),
+    );
   }
 
   void _onChunk(LogChunk chunk) {
@@ -94,68 +110,115 @@ class LogsNotifier extends StateNotifier<LogsState> {
     final combined = (_partial[chunk.source] ?? '') + text;
     final parts = combined.split('\n');
     _partial[chunk.source] = parts.removeLast(); // trailing partial line
-    if (parts.isEmpty) return;
-    _buf.addAll(parts.map((p) => _toLine(chunk.source, p)));
+    var added = false;
+    for (final p in parts) {
+      final line = _toLine(chunk.source, p);
+      if (line != null) {
+        _buf.add(line);
+        added = true;
+      }
+    }
+    if (!added) return;
     if (_buf.length > kLogBufferCap) {
       _buf.removeRange(0, _buf.length - kLogBufferCap);
     }
     state = state.copyWith(lines: _buf);
   }
 
-  LogLine _toLine(LogStream source, String raw) {
-    if (!state.timestamps) return LogLine(source: source, text: raw);
+  /// Splits the daemon's leading RFC3339Nano timestamp off [raw]. Returns
+  /// null for a repeat of a line already shown before a resume.
+  LogLine? _toLine(LogStream source, String raw) {
     final space = raw.indexOf(' ');
     if (space > 0) {
-      final ts = DateTime.tryParse(raw.substring(0, space));
-      if (ts != null) {
-        return LogLine(source: source, text: raw.substring(space + 1), timestamp: ts);
+      final rawTs = raw.substring(0, space);
+      final nanos = rfc3339ToEpochNanos(rawTs);
+      if (nanos != null) {
+        final floor = _floor;
+        if (floor != null && nanos <= floor) return null;
+        final cursor = _cursor;
+        if (cursor == null || nanos > cursor) _cursor = nanos;
+        return LogLine(
+          source: source,
+          text: raw.substring(space + 1),
+          timestamp: DateTime.tryParse(rawTs),
+          rawTimestamp: rawTs,
+        );
       }
     }
     return LogLine(source: source, text: raw);
   }
 
-  void _onError(Object e, StackTrace _) =>
-      state = state.copyWith(status: LogsStatus.error, error: e.toString());
-
-  void _onDone() {
-    if (state.status != LogsStatus.error) {
-      state = state.copyWith(status: LogsStatus.idle);
+  void _onStatus(SupervisorStatus s, DockerError? error) {
+    switch (s) {
+      case SupervisorStatus.streaming:
+        state = state.copyWith(status: LogsStatus.streaming, clearError: true);
+      case SupervisorStatus.retrying:
+        state = state.copyWith(status: LogsStatus.reconnecting);
+      case SupervisorStatus.paused:
+        state = state.copyWith(status: _live ? LogsStatus.paused : LogsStatus.reconnecting);
+      case SupervisorStatus.failed:
+        state = state.copyWith(status: LogsStatus.error, error: error?.message ?? 'Log stream failed');
+      case SupervisorStatus.done:
+        state = state.copyWith(status: LogsStatus.idle);
+      case SupervisorStatus.idle:
+        break;
     }
   }
 
-  /// Pause = stop the live tail but KEEP the buffered lines (freeze).
-  /// Resume = restart streaming live.
+  /// Runs the stream only while the session is live and the user follows.
+  void _sync() {
+    if (_live && state.following) {
+      if (_supervisor.status == SupervisorStatus.done) {
+        // Ended earlier (the container stopped): look again from the cursor.
+        _supervisor.retry();
+      } else {
+        _supervisor.resume();
+      }
+    } else {
+      _supervisor.pause();
+      if (_supervisor.status == SupervisorStatus.paused) {
+        state = state.copyWith(status: _live ? LogsStatus.paused : LogsStatus.reconnecting);
+      }
+    }
+  }
+
+  /// The session is (not) usable: pause while reconnecting or backgrounded.
+  void setLive(bool live) {
+    if (live == _live) return;
+    _live = live;
+    _sync();
+  }
+
+  /// Pause = freeze the view and stop reading; resume continues from the
+  /// last line received (no gap, no duplicates).
   void setFollowing(bool value) {
     if (value == state.following) return;
-    if (value) {
-      state = state.copyWith(following: true);
-      _start();
-    } else {
-      _sub?.cancel();
-      _sub = null;
-      state = state.copyWith(following: false, status: LogsStatus.paused);
-    }
+    state = state.copyWith(following: value);
+    _sync();
   }
 
-  void setTimestamps(bool value) {
-    state = state.copyWith(timestamps: value);
-    _start();
-  }
+  /// Display-only: the daemon always sends timestamps.
+  void setTimestamps(bool value) => state = state.copyWith(timestamps: value);
 
+  /// Starts over with a new tail size (a one-off fetch while paused).
   void setTail(int? value) {
-    state = state.copyWith(tail: value, clearTail: value == null);
-    _start();
+    _cursor = null;
+    _floor = null;
+    _buf.clear();
+    state = state.copyWith(tail: value, clearTail: value == null, lines: _buf);
+    if (_live) _supervisor.retry();
   }
 
   void setSearch(String value) => state = state.copyWith(search: value);
 
-  void retry() => _start();
+  /// Reopens now, continuing from the last line received.
+  void retry() => _supervisor.retry();
 
   String snapshot() => state.lines.map((l) => l.text).join('\n');
 
   @override
   void dispose() {
-    _sub?.cancel();
+    _supervisor.dispose();
     super.dispose();
   }
 }
@@ -170,8 +233,16 @@ final containerInspectProvider =
 final logsProvider =
     StateNotifierProvider.autoDispose.family<LogsNotifier, LogsState, ({String id, bool tty})>(
   (ref, key) {
-    final client = ref.watch(dockerClientProvider);
-    if (client == null) throw StateError('Not connected');
-    return LogsNotifier(client, key.id, key.tty);
+    // A new connection resets the buffer; a reconnect within it does not.
+    ref.watch(sessionProvider.select((s) => s.sessionId));
+    final notifier = LogsNotifier(
+      () => ref.read(dockerClientProvider),
+      key.id,
+      key.tty,
+      policy: ref.read(reconnectPolicyProvider),
+    );
+    notifier.setLive(ref.read(sessionProvider).streamsUsable);
+    ref.listen<bool>(sessionProvider.select((s) => s.streamsUsable), (_, live) => notifier.setLive(live));
+    return notifier;
   },
 );

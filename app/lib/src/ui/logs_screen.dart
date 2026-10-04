@@ -100,6 +100,15 @@ class _LogsBodyState extends ConsumerState<_LogsBody> {
             ),
             if (state.status == LogsStatus.error)
               _ErrorBanner(message: state.error ?? 'stream error', onRetry: notifier.retry),
+            if (state.status == LogsStatus.reconnecting)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Row(children: [
+                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                  SizedBox(width: 8),
+                  Text('Reconnecting stream...'),
+                ]),
+              ),
             Expanded(
               child: ListView.builder(
                 controller: _scroll,
