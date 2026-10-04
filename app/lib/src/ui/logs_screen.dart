@@ -17,6 +17,8 @@ class LogsScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: Text(containerName)),
       body: inspect.when(
+        // A reconnect reloads the inspect; keep the body (and its log buffer) meanwhile.
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorBanner(
           message: '$e',

@@ -72,6 +72,14 @@ final dockerClientProvider = Provider<DockerApiClient?>((ref) {
   return DockerApiClient(transport, apiVersion: apiVersion);
 });
 
+/// The client for work started from a session listener, such as reopening a
+/// stream when the session comes back. [dockerClientProvider] can still hold
+/// the previous transport at that moment, so prefer the session's own client;
+/// the provider is the fallback for an overridden transport without a
+/// connected session.
+DockerApiClient? currentClient(Ref ref) =>
+    ref.read(sessionProvider.notifier).client ?? ref.read(dockerClientProvider);
+
 /// Maps event categories to the providers that show them.
 ///
 /// Invalidates through [Ref.container] rather than the [Ref] itself: the ref

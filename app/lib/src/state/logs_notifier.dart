@@ -236,7 +236,7 @@ final logsProvider =
     // A new connection resets the buffer; a reconnect within it does not.
     ref.watch(sessionProvider.select((s) => s.sessionId));
     final notifier = LogsNotifier(
-      () => ref.read(dockerClientProvider),
+      () => currentClient(ref),
       key.id,
       key.tty,
       policy: ref.read(reconnectPolicyProvider),

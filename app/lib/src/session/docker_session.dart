@@ -88,6 +88,11 @@ class DockerSession extends StateNotifier<SessionState> {
 
   bool _current(int gen) => mounted && gen == _generation;
 
+  /// The client on the current transport, or null while not connected. It is
+  /// already the new one when listeners hear about a reconnect; providers
+  /// derived from [state] catch up only after their own listener has run.
+  DockerApiClient? get client => _client;
+
   /// Builds a transport for [profile], probes the daemon and goes live.
   /// Throws only [HostKeyMismatchException] (and only while this attempt is
   /// still current); other failures leave the session disconnected with

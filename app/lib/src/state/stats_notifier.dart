@@ -119,7 +119,7 @@ class StatsNotifier extends StateNotifier<StatsState> {
 /// screen that watches it leaves. A new connection resets the history.
 final statsProvider = StateNotifierProvider.autoDispose.family<StatsNotifier, StatsState, String>((ref, id) {
   ref.watch(sessionProvider.select((s) => s.sessionId));
-  final notifier = StatsNotifier(() => ref.read(dockerClientProvider), id, policy: ref.read(reconnectPolicyProvider));
+  final notifier = StatsNotifier(() => currentClient(ref), id, policy: ref.read(reconnectPolicyProvider));
   notifier.setLive(ref.read(sessionProvider).streamsUsable);
   ref.listen<bool>(sessionProvider.select((s) => s.streamsUsable), (_, live) => notifier.setLive(live));
   return notifier;
