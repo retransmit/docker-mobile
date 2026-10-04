@@ -33,8 +33,10 @@ class ProfilesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profiles = ref.watch(profilesProvider);
-    final session = ref.watch(sessionProvider);
-    final connecting = session.status == SessionStatus.connecting;
+    final (status, sessionProfileId, sessionError) =
+        ref.watch(sessionProvider.select((s) => (s.status, s.profile?.id, s.error)));
+    // While a connect is in flight the screen is busy: only its own row reacts, to cancel it.
+    final connecting = status == SessionStatus.connecting;
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
@@ -48,7 +50,7 @@ class ProfilesScreen extends ConsumerWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _openEditor(context, ref),
+        onPressed: connecting ? null : () => _openEditor(context, ref),
         child: const Icon(Icons.add),
       ),
       body: AnimatedSwitcher(
@@ -64,7 +66,7 @@ class ProfilesScreen extends ConsumerWidget {
                 title: 'No connections',
                 message: 'Add a Docker host to get started.',
                 action: FilledButton.icon(
-                  onPressed: () => _openEditor(context, ref),
+                  onPressed: connecting ? null : () => _openEditor(context, ref),
                   icon: const Icon(Icons.add),
                   label: const Text('Add connection'),
                 ),
@@ -74,7 +76,7 @@ class ProfilesScreen extends ConsumerWidget {
                   for (final p in list)
                     Card(
                       child: ListTile(
-                        leading: connecting && session.profile?.id == p.id
+                        leading: connecting && sessionProfileId == p.id
                             ? const SizedBox(
                                 width: 44,
                                 height: 44,
@@ -95,20 +97,26 @@ class ProfilesScreen extends ConsumerWidget {
                                 Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
                               ],
                             ),
-                            if (session.status == SessionStatus.disconnected &&
-                                session.error != null &&
-                                session.profile?.id == p.id)
+                            if (connecting && sessionProfileId == p.id)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text('Connecting - tap to cancel', style: Theme.of(context).textTheme.bodySmall),
+                              ),
+                            if (status == SessionStatus.disconnected && sessionError != null && sessionProfileId == p.id)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
                                 child: Text(
-                                  session.error!.message,
+                                  sessionError.message,
                                   style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.error),
                                 ),
                               ),
                           ],
                         ),
-                        onTap: connecting ? null : () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
+                        onTap: connecting
+                            ? (sessionProfileId == p.id ? () => ref.read(sessionProvider.notifier).disconnect() : null)
+                            : () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
                         trailing: PopupMenuButton<String>(
+                          enabled: !connecting,
                           onSelected: (v) async {
                             if (v == 'edit') {
                               await _openEditor(context, ref, editing: p);

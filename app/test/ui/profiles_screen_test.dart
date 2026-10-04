@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,6 +8,7 @@ import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
+import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/ui/connection_screen.dart';
 import 'package:docker_mobile/src/ui/home_screen.dart';
 import 'package:docker_mobile/src/ui/profiles_screen.dart';
@@ -120,7 +123,7 @@ void main() {
     expect(find.text('gone'), findsNothing);
   });
 
-  testWidgets('the connecting row shows a spinner and every row ignores taps', (tester) async {
+  testWidgets('the connecting row shows a spinner and the other rows ignore taps', (tester) async {
     final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(
@@ -129,9 +132,115 @@ void main() {
     );
     await tester.tap(find.text('Beta'));
     await tester.pump();
+    expect(stub.connects, isEmpty);
+    expect(stub.disconnects, 0);
+  });
+
+  testWidgets('tapping the connecting row cancels the connect', (tester) async {
+    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
     await tester.tap(find.text('Alpha'));
     await tester.pump();
+    expect(stub.disconnects, 1);
     expect(stub.connects, isEmpty);
+  });
+
+  testWidgets('tapping the connecting row cancels a real connect, and its late handshake changes nothing', (tester) async {
+    final store = InMemoryProfileStore();
+    await store.add(_a);
+    await store.add(_b);
+    final held = Completer<Transport>(); // Alpha's handshake, answered only at the end
+    final lateDaemon = FakeDaemon();
+    final factory = FakeTransportFactory([
+      held.future,
+      const DockerError(DockerErrorKind.network, 'Cannot reach the daemon: refused'),
+    ]);
+    await pumpListWithSession(tester, store, factory);
+    final container = ProviderScope.containerOf(tester.element(find.byType(ProfilesScreen)));
+    SessionState session() => container.read(sessionProvider);
+
+    await tester.tap(find.text('Alpha'));
+    await tester.pump();
+    expect(session().status, SessionStatus.connecting);
+
+    await tester.tap(find.text('Alpha')); // the connecting row
+    await tester.pump();
+    expect(session().status, SessionStatus.disconnected);
+    expect(session().error, isNull);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('Connecting - tap to cancel'), findsNothing);
+    expect(factory.builds, 1);
+
+    // The rows take taps again.
+    await tester.tap(find.text('Beta'));
+    await tester.pumpAndSettle();
+    expect(factory.builds, 2);
+    expect(
+      find.descendant(of: find.widgetWithText(Card, 'Beta'), matching: find.text('Cannot reach the daemon: refused')),
+      findsOneWidget,
+    );
+
+    // The cancelled handshake answers after all: its transport is closed and nothing else changes.
+    held.complete(lateDaemon.transport);
+    await tester.pumpAndSettle();
+    expect(lateDaemon.transport.closed, isTrue);
+    expect(session().status, SessionStatus.disconnected);
+    expect(session().profile!.id, 'b');
+    expect(session().error!.message, 'Cannot reach the daemon: refused');
+    expect(find.byType(HomeScreen, skipOffstage: false), findsNothing);
+  });
+
+  testWidgets('the add button and the row menus are off while connecting', (tester) async {
+    await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ConnectionScreen), findsNothing);
+
+    for (final menu in [find.byType(PopupMenuButton<String>).first, find.byType(PopupMenuButton<String>).last]) {
+      await tester.tap(menu);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Edit'), findsNothing);
+      expect(find.text('Delete'), findsNothing);
+    }
+
+    // Settings has nothing to do with the connect and stays live.
+    expect(tester.widget<IconButton>(find.widgetWithIcon(IconButton, Icons.settings)).onPressed, isNotNull);
+  });
+
+  testWidgets('the empty-state add button is off while connecting', (tester) async {
+    final stub = await pumpList(tester, InMemoryProfileStore());
+    stub.setState(const SessionState(status: SessionStatus.connecting, profile: _a));
+    await tester.pump();
+    await tester.tap(find.widgetWithText(FilledButton, 'Add connection'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(ConnectionScreen), findsNothing);
+  });
+
+  testWidgets('the connecting row says how to cancel', (tester) async {
+    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
+    final hint = find.text('Connecting - tap to cancel');
+    expect(hint, findsOneWidget);
+    expect(find.descendant(of: find.widgetWithText(Card, 'Alpha'), matching: hint), findsOneWidget);
+    expect(tester.widget<Text>(hint).style, Theme.of(tester.element(hint)).textTheme.bodySmall);
+
+    stub.setState(const SessionState());
+    await tester.pump();
+    expect(hint, findsNothing);
+  });
+
+  testWidgets('no inline error while the session is reconnecting or failed', (tester) async {
+    const error = DockerError(DockerErrorKind.network, 'Cannot reach the daemon: refused');
+    final stub = await pumpProfiles(tester, const SessionState(profile: _b, error: error));
+    expect(find.text(error.message), findsOneWidget); // a failed connect does show it
+
+    for (final status in [SessionStatus.reconnecting, SessionStatus.failed]) {
+      stub.setState(SessionState(status: status, profile: _b, attempt: 1, error: error));
+      await tester.pump();
+      expect(find.text(error.message), findsNothing, reason: status.name);
+      expect(find.text('Beta'), findsOneWidget);
+    }
   });
 
   testWidgets('a failed connect shows its error under that profile only', (tester) async {
@@ -156,19 +265,22 @@ void main() {
     expect(stub.connects.single.id, 'a');
   });
 
-  testWidgets('the spinner replaces the avatar without moving the row', (tester) async {
+  testWidgets('the spinner replaces the avatar without shifting the row text sideways', (tester) async {
     final stub = await pumpProfiles(tester, const SessionState());
     final row = find.widgetWithText(Card, 'Alpha');
-    final title = tester.getTopLeft(find.text('Alpha'));
-    final size = tester.getSize(row);
+    final host = find.descendant(of: row, matching: find.byType(MonoText));
+    final titleX = tester.getTopLeft(find.text('Alpha')).dx;
+    final hostX = tester.getTopLeft(host).dx;
+    final width = tester.getSize(row).width;
     expect(find.descendant(of: row, matching: find.byType(LeadingAvatar)), findsOneWidget);
 
     stub.setState(const SessionState(status: SessionStatus.connecting, profile: _a));
     await tester.pump();
     expect(find.descendant(of: row, matching: find.byType(LeadingAvatar)), findsNothing);
     expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsOneWidget);
-    expect(tester.getTopLeft(find.text('Alpha')), title);
-    expect(tester.getSize(row), size);
+    expect(tester.getTopLeft(find.text('Alpha')).dx, titleX);
+    expect(tester.getTopLeft(host).dx, hostX);
+    expect(tester.getSize(row).width, width);
   });
 
   testWidgets('Save & Connect from the editor connects on the list', (tester) async {
