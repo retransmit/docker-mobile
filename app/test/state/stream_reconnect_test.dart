@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
@@ -26,12 +27,13 @@ const _logs = (id: 'a', tty: true);
 /// A container over the real session. The session takes [transports] in
 /// order: the first on connect, the next on every reconnect or new
 /// connection. A future of a transport holds that connection open until it
-/// completes.
-ProviderContainer _container(List<Object> transports) {
+/// completes. The test moves the app to the background and back through
+/// [lifecycle].
+ProviderContainer _container(List<Object> transports, {ManualLifecycleSource? lifecycle}) {
   final c = ProviderContainer(overrides: [
     transportFactoryProvider.overrideWithValue(FakeTransportFactory(transports)),
     reconnectPolicyProvider.overrideWithValue(immediatePolicy()),
-    lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
+    lifecycleSourceProvider.overrideWithValue(lifecycle ?? ManualLifecycleSource()),
     profileStoreProvider.overrideWithValue(InMemoryProfileStore()),
   ]);
   addTearDown(c.dispose);
@@ -121,5 +123,30 @@ void main() {
     expect(d2.logOpens, hasLength(1));
     expect(c.read(logsProvider(_logs)).following, isTrue);
     expect(c.read(logsProvider(_logs)).status, LogsStatus.streaming);
+  });
+
+  test('the background cancels the logs stream; the foreground reopens it once, from the cursor', () async {
+    final d = FakeContainerDaemon();
+    final lifecycle = ManualLifecycleSource();
+    final c = _container([d.transport], lifecycle: lifecycle);
+    await c.read(sessionProvider.notifier).connect(_profileA);
+    c.listen(logsProvider(_logs), (_, _) {});
+    await pumpEventQueue();
+    d.logs.add(utf8.encode('$firstLogStamp first\n'));
+    await pumpEventQueue();
+    final before = d.logs;
+    expect(before.hasListener, isTrue);
+
+    lifecycle.emit(AppLifecycleState.paused);
+    await pumpEventQueue();
+    expect(before.hasListener, isFalse);
+    expect(d.logOpens, hasLength(1));
+
+    lifecycle.emit(AppLifecycleState.resumed);
+    await pumpEventQueue();
+    expect(d.logOpens, hasLength(2));
+    expect(d.logOpens.last.query!['since'], rfc3339ToUnixNanos(firstLogStamp));
+    expect(d.logs.hasListener, isTrue);
+    expect(c.read(logsProvider(_logs)).lines.single.text, 'first');
   });
 }

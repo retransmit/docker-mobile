@@ -223,13 +223,28 @@ void main() {
     });
   });
 
-  test('a user pause while not live stays paused when the session comes back', () {
+  test('a user pause survives the session going away and coming back', () {
     fakeAsync((async) {
       final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
       final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
       async.flushMicrotasks();
       n.setFollowing(false);
       n.setLive(false);
+      n.setLive(true);
+      async.flushMicrotasks();
+      expect(n.state.status, LogsStatus.paused);
+      expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(1));
+      n.dispose();
+    });
+  });
+
+  test('a user pause while the session is away stays paused when it comes back', () {
+    fakeAsync((async) {
+      final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
+      final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+      async.flushMicrotasks();
+      n.setLive(false);
+      n.setFollowing(false);
       n.setLive(true);
       async.flushMicrotasks();
       expect(n.state.status, LogsStatus.paused);

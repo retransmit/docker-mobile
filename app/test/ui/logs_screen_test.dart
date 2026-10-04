@@ -1,14 +1,17 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/logs_screen.dart';
 
 import '../support/fake_transport.dart';
+import '../support/stub_session.dart';
 
 List<int> frame(int type, List<int> p) {
   final n = p.length;
@@ -100,5 +103,30 @@ void main() {
     await tester.pumpAndSettle();
     expect(t.calls.where((c) => c.method == 'GET'), hasLength(2)); // Retry asks the daemon again
     expect(find.byType(MaterialBanner), findsOneWidget);
+  });
+
+  testWidgets('a reconnecting session shows the reconnecting row and keeps the lines', (tester) async {
+    late StreamController<List<int>> logs; // the most recently opened log stream
+    final t = logsFake()..onStream('/containers/a/logs', (_) => (logs = StreamController<List<int>>()).stream);
+    final connected = SessionState(status: SessionStatus.connected, transport: t, sessionId: 1);
+    final stub = StubSession(connected);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: const MaterialApp(home: LogsScreen(containerId: 'a', containerName: 'web')),
+    ));
+    await tester.pumpAndSettle();
+    logs.add(frame(1, utf8.encode('hello-out\n')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('hello-out', findRichText: true), findsOneWidget);
+    expect(find.text('Reconnecting stream...'), findsNothing);
+
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump();
+    expect(find.text('Reconnecting stream...'), findsOneWidget);
+    expect(find.textContaining('hello-out', findRichText: true), findsOneWidget);
+
+    stub.setState(connected);
+    await tester.pumpAndSettle();
+    expect(find.text('Reconnecting stream...'), findsNothing);
   });
 }

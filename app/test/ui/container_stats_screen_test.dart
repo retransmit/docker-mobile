@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/container_stats_screen.dart';
@@ -11,6 +13,7 @@ import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
 
 import '../support/fake_transport.dart';
+import '../support/stub_session.dart';
 
 const _sample =
     '{"cpu_stats":{"cpu_usage":{"total_usage":2000000000},"system_cpu_usage":10000000000,"online_cpus":4},'
@@ -65,15 +68,40 @@ void main() {
   });
 
   testWidgets('a failing stats stream renders an ErrorView with Retry', (tester) async {
-    await tester.pumpWidget(_wrap(FakeTransport()
-      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(404, '{"message":"boom"}')))));
+    final t = FakeTransport()
+      ..onStream('/containers/abc/stats', (_) => Stream.error(DockerError.fromResponse(404, '{"message":"boom"}')));
+    await tester.pumpWidget(_wrap(t));
     await tester.pumpAndSettle();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
 
     expect(find.byType(ErrorView), findsOneWidget);
     expect(find.text('boom'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+    expect(opens(), hasLength(1));
     await tester.tap(find.text('Retry'));
     await tester.pumpAndSettle();
-    expect(find.byType(ErrorView), findsOneWidget); // the same 404 again, after a real reopen
+    expect(opens(), hasLength(2)); // Retry opened the stream again
+    expect(find.byType(ErrorView), findsOneWidget); // and the same 404 came back
+  });
+
+  testWidgets('a reconnecting session shows Reconnecting above the cards and keeps the sample', (tester) async {
+    final stats = StreamController<List<int>>();
+    final t = FakeTransport()..onStream('/containers/abc/stats', (_) => stats.stream);
+    final connected = SessionState(status: SessionStatus.connected, transport: t, sessionId: 1);
+    final stub = StubSession(connected);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: const MaterialApp(home: ContainerStatsScreen(containerId: 'abc', containerName: 'web')),
+    ));
+    stats.add(utf8.encode('$_sample\n'));
+    await tester.pumpAndSettle();
+    expect(find.text('40.0 %'), findsOneWidget);
+    expect(find.text('Reconnecting...'), findsNothing);
+
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('Reconnecting...'), findsOneWidget);
+    expect(find.text('40.0 %'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Reconnecting...')).dy, lessThan(tester.getTopLeft(find.text('CPU')).dy));
   });
 }
