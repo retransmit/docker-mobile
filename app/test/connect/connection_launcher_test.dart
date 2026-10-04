@@ -54,7 +54,9 @@ void main() {
     await tester.pump();
     expect(find.byType(HomeScreen), findsNothing);
     expect(c.read(transportProvider), isNull);
-    expect(find.textContaining('refused'), findsOneWidget);
+    // No snackbar: the Connections screen shows the session's error inline.
+    expect(find.byType(SnackBar), findsNothing);
+    expect(c.read(sessionProvider).error!.message, 'refused');
   });
 
   testWidgets('SSH first use pins the presented key into the stored profile', (tester) async {

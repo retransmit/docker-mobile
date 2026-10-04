@@ -4,6 +4,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../api/models/log_line.dart';
 import '../api/stdcopy.dart';
+import '../session/session_state.dart';
 import '../state/logs_notifier.dart';
 import '../state/providers.dart';
 
@@ -83,6 +84,8 @@ class _LogsBodyState extends ConsumerState<_LogsBody> {
     final state = ref.watch(logsProvider(key));
     final notifier = ref.read(logsProvider(key).notifier);
     final lines = state.visibleLines;
+    // The stream waits for the session, so it still reports reconnecting once the session has given up.
+    final sessionFailed = ref.watch(sessionProvider.select((s) => s.status == SessionStatus.failed));
 
     // Keep pinned to newest while following and already at the bottom.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -107,12 +110,15 @@ class _LogsBodyState extends ConsumerState<_LogsBody> {
             if (state.status == LogsStatus.error)
               _ErrorBanner(message: state.error ?? 'stream error', onRetry: notifier.retry),
             if (state.status == LogsStatus.reconnecting)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Row(children: [
-                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-                  SizedBox(width: 8),
-                  Text('Reconnecting stream...'),
+                  if (sessionFailed)
+                    const Icon(Icons.cloud_off, size: 16)
+                  else
+                    const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(width: 8),
+                  Text(sessionFailed ? 'Connection lost' : 'Reconnecting stream...'),
                 ]),
               ),
             Expanded(

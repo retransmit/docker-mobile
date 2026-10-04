@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../connect/connection_launcher.dart';
+import '../session/session_state.dart';
 import '../state/providers.dart';
 import '../storage/profile_store.dart';
 import 'connection_screen.dart';
@@ -23,6 +24,9 @@ class ProfilesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profiles = ref.watch(profilesProvider);
+    final session = ref.watch(sessionProvider);
+    final connecting = session.status == SessionStatus.connecting;
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Connections'),
@@ -61,16 +65,40 @@ class ProfilesScreen extends ConsumerWidget {
                   for (final p in list)
                     Card(
                       child: ListTile(
-                        leading: LeadingAvatar(icon: _icon(p.kind)),
+                        leading: connecting && session.profile?.id == p.id
+                            ? const SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: Center(
+                                  child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                                ),
+                              )
+                            : LeadingAvatar(icon: _icon(p.kind)),
                         title: Text(p.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        subtitle: Row(
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            MetaChip(p.kind.name),
-                            const SizedBox(width: 8),
-                            Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
+                            Row(
+                              children: [
+                                MetaChip(p.kind.name),
+                                const SizedBox(width: 8),
+                                Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
+                              ],
+                            ),
+                            if (session.status == SessionStatus.disconnected &&
+                                session.error != null &&
+                                session.profile?.id == p.id)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text(
+                                  session.error!.message,
+                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.error),
+                                ),
+                              ),
                           ],
                         ),
-                        onTap: () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
+                        onTap: connecting ? null : () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
                         trailing: PopupMenuButton<String>(
                           onSelected: (v) async {
                             if (v == 'edit') {

@@ -5,9 +5,10 @@ import '../state/providers.dart';
 
 /// Returns to the Connections list, then tears the session down: pop first
 /// (disposing the screens that watch the connection), then disconnect.
-Future<void> disconnect(BuildContext context, WidgetRef ref) async {
-  final navigator = Navigator.of(context);
+/// Pass [navigator] when [context] sits above the app's navigator.
+Future<void> disconnect(BuildContext context, WidgetRef ref, {NavigatorState? navigator}) async {
+  final nav = navigator ?? Navigator.of(context);
   final session = ref.read(sessionProvider.notifier);
-  navigator.popUntil((r) => r.isFirst);
+  nav.popUntil((r) => r.isFirst);
   await session.disconnect();
 }

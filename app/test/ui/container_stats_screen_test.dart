@@ -104,4 +104,32 @@ void main() {
     expect(find.text('40.0 %'), findsOneWidget);
     expect(tester.getTopLeft(find.text('Reconnecting...')).dy, lessThan(tester.getTopLeft(find.text('CPU')).dy));
   });
+
+  testWidgets('a session that gave up shows Connection lost above the cards', (tester) async {
+    final stats = StreamController<List<int>>();
+    final t = FakeTransport()..onStream('/containers/abc/stats', (_) => stats.stream);
+    final connected = SessionState(status: SessionStatus.connected, transport: t, sessionId: 1);
+    final stub = StubSession(connected);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: const MaterialApp(home: ContainerStatsScreen(containerId: 'abc', containerName: 'web')),
+    ));
+    stats.add(utf8.encode('$_sample\n'));
+    await tester.pumpAndSettle();
+    expect(find.text('40.0 %'), findsOneWidget);
+
+    // While the session retries, the note says so.
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pumpAndSettle();
+    expect(find.text('Reconnecting...'), findsOneWidget);
+    expect(find.text('Connection lost'), findsNothing);
+
+    // Once it gives up, nothing is reconnecting any more.
+    stub.setState(connected.copyWith(status: SessionStatus.failed));
+    await tester.pumpAndSettle();
+    expect(find.text('Connection lost'), findsOneWidget);
+    expect(find.text('Reconnecting...'), findsNothing);
+    expect(find.text('40.0 %'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Connection lost')).dy, lessThan(tester.getTopLeft(find.text('CPU')).dy));
+  });
 }

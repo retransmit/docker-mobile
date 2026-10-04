@@ -8,11 +8,11 @@ import '../storage/profile_store.dart';
 import '../ui/home_screen.dart';
 
 /// Connects the session to [profile] and opens Home on success. The only
-/// place the SSH host-key TOFU dialog lives.
+/// place the SSH host-key TOFU dialog lives. A failed connect stays in the
+/// session state, which the Connections screen shows inline.
 Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionProfile profile,
     {String? pinOverride}) async {
   final navigator = Navigator.of(context);
-  final messenger = ScaffoldMessenger.of(context);
   final session = ref.read(sessionProvider.notifier);
   try {
     await session.connect(profile, pinOverride: pinOverride);
@@ -39,7 +39,5 @@ Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionPro
   final s = ref.read(sessionProvider);
   if (s.status == SessionStatus.connected) {
     navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
-  } else if (s.error != null) {
-    messenger.showSnackBar(SnackBar(content: Text('Connection failed: ${s.error!.message}')));
   }
 }

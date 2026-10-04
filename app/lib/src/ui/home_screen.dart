@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/providers.dart';
 import 'containers_screen.dart';
 import 'images_screen.dart';
 import 'networks_screen.dart';
@@ -17,6 +18,20 @@ class HomeScreen extends ConsumerStatefulWidget {
 
 class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWarning());
+  }
+
+  void _showWarning() {
+    if (!mounted) return;
+    final warning = ref.read(sessionProvider).warning;
+    if (warning == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(warning)));
+    ref.read(sessionProvider.notifier).acknowledgeWarning();
+  }
 
   @override
   Widget build(BuildContext context) {

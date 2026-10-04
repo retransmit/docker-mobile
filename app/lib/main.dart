@@ -5,6 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'src/state/theme_provider.dart';
 import 'src/theme/app_theme.dart';
 import 'src/ui/profiles_screen.dart';
+import 'src/ui/widgets/session_banner.dart';
+
+final _navigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +33,8 @@ class DockerMobileApp extends ConsumerWidget {
           theme: buildAppTheme(lightScheme),
           darkTheme: buildAppTheme(darkScheme),
           themeMode: settings.mode,
+          navigatorKey: _navigatorKey,
+          builder: (context, child) => SessionBannerHost(navigatorKey: _navigatorKey, child: child!),
           home: const ProfilesScreen(),
         );
       },

@@ -129,4 +129,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Reconnecting stream...'), findsNothing);
   });
+
+  testWidgets('a session that gave up shows Connection lost in place of the reconnecting row', (tester) async {
+    late StreamController<List<int>> logs; // the most recently opened log stream
+    final t = logsFake()..onStream('/containers/a/logs', (_) => (logs = StreamController<List<int>>()).stream);
+    final connected = SessionState(status: SessionStatus.connected, transport: t, sessionId: 1);
+    final stub = StubSession(connected);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: const MaterialApp(home: LogsScreen(containerId: 'a', containerName: 'web')),
+    ));
+    await tester.pumpAndSettle();
+    logs.add(frame(1, utf8.encode('hello-out\n')));
+    await tester.pumpAndSettle();
+
+    // While the session retries, the stream waits for it and says so.
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump();
+    expect(find.text('Reconnecting stream...'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('Connection lost'), findsNothing);
+
+    // Once it gives up, nothing is reconnecting any more.
+    stub.setState(connected.copyWith(status: SessionStatus.failed));
+    await tester.pump();
+    expect(find.text('Connection lost'), findsOneWidget);
+    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
+    expect(find.text('Reconnecting stream...'), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('hello-out', findRichText: true), findsOneWidget);
+  });
 }
