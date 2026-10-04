@@ -222,15 +222,16 @@ class _Controls extends StatelessWidget {
             icon: Icon(state.timestamps ? Icons.schedule : Icons.schedule_outlined),
             onPressed: () => onTimestamps(!state.timestamps),
           ),
-          PopupMenuButton<int?>(
+          PopupMenuButton<int>(
             tooltip: 'Tail',
             icon: const Icon(Icons.format_list_numbered),
-            onSelected: onTail,
+            // 0 stands for "all": a null value would read as a dismissed menu.
+            onSelected: (v) => onTail(v == 0 ? null : v),
             itemBuilder: (_) => const [
               PopupMenuItem(value: 100, child: Text('Tail 100')),
               PopupMenuItem(value: 500, child: Text('Tail 500')),
               PopupMenuItem(value: 1000, child: Text('Tail 1000')),
-              PopupMenuItem(value: null, child: Text('All')),
+              PopupMenuItem(value: 0, child: Text('All')),
             ],
           ),
           IconButton(tooltip: 'Share', icon: const Icon(Icons.ios_share), onPressed: onShare),

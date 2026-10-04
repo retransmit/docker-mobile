@@ -63,4 +63,26 @@ void main() {
 
     expect(find.byIcon(Icons.arrow_downward), findsOneWidget);
   });
+
+  testWidgets('the tail menu refetches with the chosen size, and with All', (tester) async {
+    final t = logsFake();
+    await tester.pumpWidget(_wrap(t));
+    await tester.pumpAndSettle();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+    expect(opens(), hasLength(1));
+
+    await tester.tap(find.byTooltip('Tail'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Tail 100'));
+    await tester.pumpAndSettle();
+    expect(opens(), hasLength(2));
+    expect(opens().last.query!['tail'], '100');
+
+    await tester.tap(find.byTooltip('Tail'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+    expect(opens(), hasLength(3));
+    expect(opens().last.query!['tail'], 'all');
+  });
 }
