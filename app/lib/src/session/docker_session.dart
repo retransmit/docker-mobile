@@ -130,7 +130,7 @@ class DockerSession extends StateNotifier<SessionState> {
         await _closeQuietly(built.transport);
         return false;
       }
-      final pinned = await _persistPin(profile, pinOverride, built.presentedHostKey, gen);
+      final pinned = await _persistPin(profile, pinOverride, built.presentedHostKey);
       if (!_current(gen)) {
         await _closeQuietly(built.transport);
         return false;
@@ -336,7 +336,6 @@ class DockerSession extends StateNotifier<SessionState> {
     ConnectionProfile profile,
     String? pinOverride,
     String? presented,
-    int gen,
   ) async {
     final ssh = profile.ssh;
     if (profile.kind != ConnectionKind.ssh || ssh == null) return profile;
@@ -355,7 +354,8 @@ class DockerSession extends StateNotifier<SessionState> {
       ),
     );
     await _profiles.update(updated);
-    if (_current(gen)) _onProfilesChanged?.call();
+    // The pin is stored whether or not this attempt is still wanted: the list has to show it.
+    if (mounted) _onProfilesChanged?.call();
     return updated;
   }
 

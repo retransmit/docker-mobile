@@ -84,6 +84,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
     expect(factory.pinOverrides, [null, 'FP-NEW']);
     expect((await store.list()).single.ssh!.pinnedHostKey, 'FP-NEW');
+    expect(find.byType(HomeScreen), findsOneWidget); // the trusted connect opens Home like any other
   });
 
   testWidgets('Cancel on the mismatch dialog leaves the pin alone', (tester) async {

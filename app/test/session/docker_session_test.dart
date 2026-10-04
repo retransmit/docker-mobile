@@ -393,8 +393,29 @@ void main() {
           expect(result(), isFalse);
           expect(h.s.status, SessionStatus.disconnected);
           expect(d.transport.closed, isTrue);
-          expect(h.profileChanges, 0);
+          // The write went through all the same: the pin is stored, so the list must hear of it,
+          // or the next tap would connect with the unpinned copy.
+          h.store.list().then((ps) => expect(ps.single.ssh!.pinnedHostKey, 'FP'));
+          async.flushMicrotasks();
+          expect(h.profileChanges, 1);
         });
+      });
+    });
+
+    test('a host key saved after the session was disposed is not announced', () {
+      fakeAsync((async) {
+        final d = FakeDaemon();
+        final store = _HeldUpdateStore();
+        final h = _Harness([BuiltTransport(d.transport, presentedHostKey: 'FP')], store: store);
+        store.add(sshProfile());
+        async.flushMicrotasks();
+        h.session.connect(sshProfile());
+        async.flushMicrotasks();
+        h.session.dispose();
+        store.written.complete();
+        async.flushMicrotasks();
+        expect(h.profileChanges, 0); // nobody is left to refresh
+        expect(d.transport.closed, isTrue);
       });
     });
   });
