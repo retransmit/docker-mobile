@@ -61,7 +61,7 @@ class ExecSessionController extends ChangeNotifier {
       // down the freshly-resolved channel instead of leaking it, and never
       // notify listeners after super.dispose().
       if (_disposed || gen != _generation) {
-        unawaited(ch.close());
+        unawaited(_closeQuietly(ch));
         return;
       }
       _execId = id;
@@ -87,6 +87,10 @@ class ExecSessionController extends ChangeNotifier {
     notifyListeners(); // show "ended" now; the exit code can lag on a dead connection
     final id = _execId;
     _execId = null;
+    // An ended session lets go of its channel. After an error event the
+    // subscription is still live, and the release cancels it: a late event of
+    // the old channel must not end a session that was restarted in between.
+    unawaited(_releaseChannel());
     if (id == null) return;
     int? code;
     try {
@@ -100,16 +104,22 @@ class ExecSessionController extends ChangeNotifier {
   Future<void> restart(String newCommand) async {
     if (_disposed) return;
     command = newCommand;
-    _generation++; // a handshake still in flight must not land during the teardown
+    unawaited(_releaseChannel());
+    await _start();
+  }
+
+  /// Lets go of the channel: stops reading it, then closes it, best-effort.
+  /// The cancel comes first and takes effect at once, so nothing the channel
+  /// still sends, its own end included, reaches the session. Neither is waited
+  /// on here (a close on a dead connection must not hold anything up); the
+  /// returned future completes when the close has.
+  Future<void> _releaseChannel() {
     final sub = _outputSub;
     _outputSub = null;
     final channel = _channel;
     _channel = null;
-    // Neither the cancel nor the close is waited on: both take effect at
-    // once, and a close on a dead connection must not hold up the new session.
     unawaited(sub?.cancel());
-    unawaited(_closeQuietly(channel));
-    await _start();
+    return _closeQuietly(channel);
   }
 
   static Future<void> _closeQuietly(ExecChannel? channel) async {
@@ -125,25 +135,18 @@ class ExecSessionController extends ChangeNotifier {
   Future<void> end() async {
     if (_disposed || status == ExecStatus.ended) return;
     _generation++; // discard a handshake still in flight
-    final sub = _outputSub;
-    _outputSub = null;
-    final channel = _channel;
-    _channel = null;
+    final closed = _releaseChannel();
     _execId = null;
     status = ExecStatus.ended;
     exitCode = null;
     notifyListeners();
-    // The cancel takes effect at once; not awaiting it lets the close start
-    // in the same turn, as dispose() does.
-    unawaited(sub?.cancel());
-    await _closeQuietly(channel);
+    await closed;
   }
 
   @override
   void dispose() {
     _disposed = true;
-    _outputSub?.cancel();
-    _channel?.close();
+    unawaited(_releaseChannel());
     super.dispose();
   }
 }

@@ -3,11 +3,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:xterm/xterm.dart';
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/transport/transport.dart';
 import 'package:docker_mobile/src/ui/exec_screen.dart';
 
 import '../support/fake_transport.dart';
+import '../support/stub_session.dart';
 
 void main() {
   testWidgets('renders the terminal and command bar, then shows session ended', (tester) async {
@@ -133,5 +135,78 @@ void main() {
     final after = tester.widget<TerminalView>(find.byType(TerminalView)).key;
     expect(after, isNotNull);
     expect(after, isNot(before));
+  });
+
+  /// Opens the exec screen on a session the test drives: connected on [t] at first.
+  Future<({StubSession stub, SessionState connected})> pumpOnSession(WidgetTester tester, FakeTransport t) async {
+    final connected = SessionState(status: SessionStatus.connected, transport: t, sessionId: 1);
+    final stub = StubSession(connected);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [sessionProvider.overrideWith((ref) => stub)],
+      child: const MaterialApp(home: ExecScreen(containerId: 'abc', containerName: 'web')),
+    ));
+    await tester.pump(const Duration(milliseconds: 100));
+    return (stub: stub, connected: connected);
+  }
+
+  testWidgets('New session waits for a usable session', (tester) async {
+    final t = freshExecFake();
+    final (:stub, :connected) = await pumpOnSession(tester, t);
+    await t.lastChannel.controller.close(); // the process exits
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('Session ended'), findsOneWidget);
+
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('New session'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(1)); // nothing started on the dead connection
+    expect(find.textContaining('Session ended'), findsOneWidget);
+
+    stub.setState(connected);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('New session'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(2));
+    expect(find.textContaining('Session ended'), findsNothing);
+  });
+
+  testWidgets('Run waits for a usable session', (tester) async {
+    final t = freshExecFake();
+    final (:stub, :connected) = await pumpOnSession(tester, t);
+    await tester.enterText(find.byType(TextField), 'top');
+
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byTooltip('Run'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(1));
+
+    stub.setState(connected);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byTooltip('Run'));
+    await tester.pump(const Duration(milliseconds: 100));
+    final created = t.posts.where((c) => c.path.endsWith('/exec')).toList();
+    expect(created, hasLength(2));
+    expect((created.last.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
+  });
+
+  testWidgets('Retry waits for a usable session', (tester) async {
+    final t = FakeTransport()
+      ..onPost(RegExp(r'/exec$'), (_) => http.Response('{"message":"no such container"}', 404));
+    final (:stub, :connected) = await pumpOnSession(tester, t);
+    expect(find.text('Exec failed'), findsOneWidget);
+
+    stub.setState(connected.copyWith(status: SessionStatus.reconnecting, attempt: 1));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('Retry'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(1));
+
+    stub.setState(connected);
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('Retry'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(2));
   });
 }

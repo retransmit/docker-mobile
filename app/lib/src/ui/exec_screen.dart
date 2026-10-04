@@ -70,6 +70,9 @@ class _ExecScreenState extends ConsumerState<ExecScreen> {
     ref.listen<Transport?>(transportProvider, (previous, next) {
       if (previous != null && !identical(previous, next)) _session?.end();
     });
+    // Starting an exec waits for a usable session: while it reconnects, the
+    // client at hand is still the old, dead one.
+    final usable = ref.watch(sessionProvider.select((s) => s.streamsUsable));
     final session = _session;
     return Scaffold(
       appBar: AppBar(title: Text(widget.containerName)),
@@ -77,16 +80,16 @@ class _ExecScreenState extends ConsumerState<ExecScreen> {
           ? const Center(child: Text('Not connected'))
           : Column(
               children: [
-                _CommandBar(controller: _cmd, onRun: _run),
+                _CommandBar(controller: _cmd, onRun: usable ? _run : null),
                 if (session.status == ExecStatus.error)
                   MaterialBanner(
                     content: const Text('Exec failed'),
-                    actions: [TextButton(onPressed: _newSession, child: const Text('Retry'))],
+                    actions: [TextButton(onPressed: usable ? _newSession : null, child: const Text('Retry'))],
                   ),
                 if (session.status == ExecStatus.ended)
                   MaterialBanner(
                     content: Text('Session ended${session.exitCode != null ? ' (exit ${session.exitCode})' : ''}'),
-                    actions: [TextButton(onPressed: _newSession, child: const Text('New session'))],
+                    actions: [TextButton(onPressed: usable ? _newSession : null, child: const Text('New session'))],
                   ),
                 Expanded(child: TerminalView(session.terminal, key: ObjectKey(session))),
               ],
@@ -97,7 +100,9 @@ class _ExecScreenState extends ConsumerState<ExecScreen> {
 
 class _CommandBar extends StatelessWidget {
   final TextEditingController controller;
-  final VoidCallback onRun;
+
+  /// Null disables the Run button.
+  final VoidCallback? onRun;
   const _CommandBar({required this.controller, required this.onRun});
 
   @override

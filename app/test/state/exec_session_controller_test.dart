@@ -15,12 +15,14 @@ FakeTransport execFake({int exitCode = 0, bool failCreate = false}) => FakeTrans
   ..onPost(RegExp(r'/resize$'), (_) => http.Response('', 200));
 
 /// The [execFake] rules, with more for the test to control: while [attachGate]
-/// or [inspectGate] is set, the attach or the exit-code inspect waits for it,
-/// and with [failClose] the channels fail when they are closed.
+/// or [inspectGate] is set, the attach or the exit-code inspect waits for it;
+/// with [failClose] the channels fail when they are closed, and [newChannel]
+/// hands out any other kind of channel.
 class _ControlledExecFake extends FakeTransport {
   Completer<void>? attachGate;
   Completer<void>? inspectGate;
   bool failClose = false;
+  FakeExecChannel Function()? newChannel;
 
   _ControlledExecFake({int exitCode = 0}) {
     onGet(RegExp(r'/exec/[^/]+/json$'), (_) => http.Response('{"Running":false,"ExitCode":$exitCode}', 200));
@@ -31,8 +33,9 @@ class _ControlledExecFake extends FakeTransport {
   @override
   Future<ExecChannel> execAttach(String execId, {required int cols, required int rows}) async {
     await attachGate?.future;
-    if (!failClose) return super.execAttach(execId, cols: cols, rows: rows);
-    final ch = _FailingCloseChannel();
+    final FakeExecChannel Function()? make = failClose ? _FailingCloseChannel.new : newChannel;
+    if (make == null) return super.execAttach(execId, cols: cols, rows: rows);
+    final ch = make();
     execChannels.add(ch);
     return ch;
   }
@@ -44,12 +47,40 @@ class _ControlledExecFake extends FakeTransport {
   }
 }
 
-/// A channel whose close fails once it has closed, as a connection that is already gone does.
+/// A channel whose close fails, as a connection that is already gone does. It counts the attempts.
 class _FailingCloseChannel extends FakeExecChannel {
+  int closeCalls = 0;
+
   @override
   Future<void> close() async {
-    await super.close();
+    closeCalls++;
+    closed = true;
+    // Not waited on: for a channel nobody listened to it would never complete.
+    if (!controller.isClosed) unawaited(controller.close());
     throw const DockerError(DockerErrorKind.network, 'connection closed');
+  }
+}
+
+/// A channel on a synchronous stream, so the session hears from it the moment
+/// the test says so. With [endsOnClose] its close reports the end at once;
+/// without, the output stays open after the close, like a connection whose
+/// other side has not hung up yet. While [closeGate] is set, the close does
+/// not complete.
+class _SyncChannel extends FakeExecChannel {
+  final bool endsOnClose;
+  final out = StreamController<List<int>>(sync: true);
+  Completer<void>? closeGate;
+
+  _SyncChannel({required this.endsOnClose});
+
+  @override
+  Stream<List<int>> get output => out.stream;
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    if (endsOnClose) unawaited(out.close());
+    await closeGate?.future;
   }
 }
 
@@ -178,6 +209,7 @@ void main() {
 
     expect(c.status, ExecStatus.ended);
     expect(t.execChannels.where((ch) => !ch.closed), isEmpty);
+    expect(t.execChannels, isEmpty); // never attached: the attach is what would start the command
     c.dispose();
   });
 
@@ -188,6 +220,7 @@ void main() {
     await pumpEventQueue();
 
     expect(t.execChannels.where((ch) => !ch.closed), hasLength(1));
+    expect(t.execChannels, hasLength(1)); // the superseded handshake never attached
     expect(c.status, ExecStatus.connected);
     final createPosts = t.posts.where((p) => p.path.endsWith('/exec')).toList();
     expect((createPosts.last.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
@@ -278,8 +311,10 @@ void main() {
     await pumpEventQueue(); // the exec is created, the attach is waiting
     c.dispose();
     t.attachGate!.complete();
-    await pumpEventQueue(); // a notification after dispose would throw and fail the test
+    await pumpEventQueue();
 
+    // A broken guard shows here, as a channel left open. Its notification
+    // after dispose would not: that throw is swallowed by _start()'s own catch.
     expect(t.execChannels.single.closed, isTrue);
   });
 
@@ -359,6 +394,190 @@ void main() {
     await c.end(); // completes although the close throws
     expect(t.execChannels.last.closed, isTrue);
     expect(c.status, ExecStatus.ended);
+    c.dispose();
+  });
+
+  test('dispose() with a channel that fails to close is not an unhandled error', () async {
+    final t = _ControlledExecFake()..failClose = true;
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.connected);
+
+    c.dispose();
+    await pumpEventQueue(); // an error nobody handles would fail the test here
+
+    expect(t.lastChannel.closed, isTrue);
+  });
+
+  test('a late channel that fails to close is not an unhandled error', () async {
+    final t = _ControlledExecFake()
+      ..attachGate = Completer<void>()
+      ..failClose = true;
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue(); // the exec is created, the attach is waiting
+
+    unawaited(c.end());
+    t.attachGate!.complete();
+    await pumpEventQueue(); // an error nobody handles would fail the test here
+
+    expect(t.execChannels.single.closed, isTrue);
+    c.dispose();
+  });
+
+  test('a session whose output closed lets go of its channel', () async {
+    final t = execFake();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final channel = t.lastChannel;
+
+    await channel.controller.close(); // the process exits
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.ended);
+    expect(channel.closed, isTrue);
+
+    c.terminal.onOutput?.call('x');
+    expect(channel.sent, isEmpty);
+    c.dispose();
+  });
+
+  test('after the output closed, end() and dispose() close nothing a second time', () async {
+    final t = _ControlledExecFake()..failClose = true;
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final channel = t.lastChannel as _FailingCloseChannel;
+
+    await channel.controller.close(); // the process exits
+    await pumpEventQueue();
+    expect(channel.closeCalls, 1);
+
+    await c.end();
+    c.dispose();
+    await pumpEventQueue(); // an error nobody handles would fail the test here
+    expect(channel.closeCalls, 1);
+  });
+
+  test('after an output error the old channel cannot end the restarted session', () async {
+    final t = _ControlledExecFake()..newChannel = () => _SyncChannel(endsOnClose: false);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final old = t.lastChannel as _SyncChannel;
+
+    old.out.addError(const DockerError(DockerErrorKind.network, 'reset')); // the session ends on it
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.ended);
+    expect(old.closed, isTrue);
+
+    await c.restart('top');
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.connected);
+
+    unawaited(old.out.close()); // the old connection hangs up at last
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.connected);
+    expect(t.lastChannel.closed, isFalse);
+    c.dispose();
+  });
+
+  test('a channel that reports its end inside close() is not taken for an ending', () async {
+    final t = _ControlledExecFake()..newChannel = () => _SyncChannel(endsOnClose: true);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final seen = <ExecStatus>[];
+    c.addListener(() => seen.add(c.status));
+
+    await c.restart('top');
+    await pumpEventQueue();
+    expect(seen, [ExecStatus.connecting, ExecStatus.connected]);
+
+    await c.end();
+    await pumpEventQueue();
+    expect(seen, [ExecStatus.connecting, ExecStatus.connected, ExecStatus.ended]);
+    c.dispose();
+  });
+
+  test('a close that takes its time holds up neither a restart nor the exit code', () async {
+    final t = _ControlledExecFake(exitCode: 7)..newChannel = () => _SyncChannel(endsOnClose: false);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final first = (t.lastChannel as _SyncChannel)..closeGate = Completer<void>();
+
+    unawaited(c.restart('top')); // the old channel's close never completes
+    await pumpEventQueue();
+    expect(first.closed, isTrue);
+    expect(t.execChannels, hasLength(2));
+    expect(c.status, ExecStatus.connected);
+
+    final second = (t.lastChannel as _SyncChannel)..closeGate = Completer<void>();
+    unawaited(second.out.close()); // the process exits, and this close hangs as well
+    await pumpEventQueue();
+    expect(second.closed, isTrue);
+    expect(c.status, ExecStatus.ended);
+    expect(c.exitCode, 7);
+    c.dispose();
+  });
+
+  test('end() completes once the channel has closed', () async {
+    final t = _ControlledExecFake()..newChannel = () => _SyncChannel(endsOnClose: false);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    final gate = (t.lastChannel as _SyncChannel).closeGate = Completer<void>();
+    var completed = false;
+
+    unawaited(c.end().then((_) => completed = true));
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.ended); // told at once
+    expect(completed, isFalse); // the close is still under way
+
+    gate.complete();
+    await pumpEventQueue();
+    expect(completed, isTrue);
+    c.dispose();
+  });
+
+  test('end() while the exec creation is failing stays ended, not error', () async {
+    final t = execFake(failCreate: true);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    unawaited(c.end()); // the create is still in flight, and it will fail
+    await pumpEventQueue();
+
+    expect(c.status, ExecStatus.ended);
+    c.dispose();
+  });
+
+  test('the exit code arrives as a second notification', () async {
+    final t = _ControlledExecFake(exitCode: 7);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    t.inspectGate = Completer<void>();
+    final seen = <(ExecStatus, int?)>[];
+    c.addListener(() => seen.add((c.status, c.exitCode)));
+
+    await t.lastChannel.controller.close(); // the output closes; the exit-code inspect is held open
+    await pumpEventQueue();
+    expect(seen, [(ExecStatus.ended, null)]);
+
+    t.inspectGate!.complete();
+    await pumpEventQueue();
+    expect(seen, [(ExecStatus.ended, null), (ExecStatus.ended, 7)]);
+    c.dispose();
+  });
+
+  test('end() on a session that already ended keeps its exit code and notifies nobody', () async {
+    final t = execFake(exitCode: 137);
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    await t.lastChannel.controller.close(); // the process exits
+    await pumpEventQueue();
+    expect(c.exitCode, 137);
+    var notifications = 0;
+    c.addListener(() => notifications++);
+
+    await c.end();
+    await pumpEventQueue();
+
+    expect(c.status, ExecStatus.ended);
+    expect(c.exitCode, 137);
+    expect(notifications, 0);
     c.dispose();
   });
 }
