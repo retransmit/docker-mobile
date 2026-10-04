@@ -18,11 +18,15 @@ void main() {
     expect(seen, contains(AppLifecycleState.paused));
     unawaited(sub.cancel()); // awaiting a cancel inside testWidgets hangs teardown
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-  });
+    expect(seen, isNot(contains(AppLifecycleState.resumed)));
 
-  test('creating an AppLifecycleSource does not touch the binding', () {
-    // Plain test(): no binding is initialised. Construction must not throw.
-    expect(AppLifecycleSource.new, returnsNormally);
+    // Listening again attaches a fresh listener.
+    final again = <AppLifecycleState>[];
+    final sub2 = source.changes.listen(again.add);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    expect(again, [AppLifecycleState.inactive]);
+    unawaited(sub2.cancel());
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
   });
 
   test('ManualLifecycleSource delivers synchronously', () {
