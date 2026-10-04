@@ -50,6 +50,10 @@ class StatsNotifier extends StateNotifier<StatsState> {
   late final StreamSupervisor<ContainerStats> _supervisor;
   bool _live = true;
 
+  /// The first sample of a stream has no previous CPU reading, so its CPU
+  /// figure is a lifetime average. With a history to continue, drop it.
+  bool _dropNext = false;
+
   StatsNotifier(this._client, this._id, {ReconnectPolicy? policy}) : super(const StatsState()) {
     _supervisor = StreamSupervisor<ContainerStats>(
       open: _open,
@@ -63,10 +67,15 @@ class StatsNotifier extends StateNotifier<StatsState> {
   Stream<ContainerStats> _open() {
     final client = _client();
     if (client == null) throw const DockerError(DockerErrorKind.unknown, 'Not connected');
+    _dropNext = state.latest != null;
     return client.streamContainerStats(_id);
   }
 
   void _onSample(ContainerStats s) {
+    if (_dropNext) {
+      _dropNext = false;
+      return;
+    }
     final cpu = [...state.cpuHistory, s.cpuPercent];
     final mem = [...state.memHistory, s.memoryPercent];
     state = state.copyWith(

@@ -19,10 +19,11 @@ void main() {
     expect(s.copyWith(status: SessionStatus.reconnecting).isLive, isFalse);
   });
 
-  test('streamsUsable is true in the foreground unless reconnecting or failed', () {
+  test('streamsUsable needs the foreground and a session that is connected or not connected at all', () {
     const s = SessionState(status: SessionStatus.connected);
     expect(s.streamsUsable, isTrue);
     expect(s.copyWith(status: SessionStatus.disconnected).streamsUsable, isTrue);
+    expect(s.copyWith(status: SessionStatus.connecting).streamsUsable, isFalse);
     expect(s.copyWith(status: SessionStatus.reconnecting).streamsUsable, isFalse);
     expect(s.copyWith(status: SessionStatus.failed).streamsUsable, isFalse);
     expect(s.copyWith(foreground: false).streamsUsable, isFalse);

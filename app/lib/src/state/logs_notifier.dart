@@ -218,7 +218,9 @@ class LogsNotifier extends StateNotifier<LogsState> {
 
   /// The session is (not) usable: pause while reconnecting or backgrounded.
   void setLive(bool live) {
-    if (live == _live) return;
+    // A new connection disposes this notifier, and the session update that
+    // does so still reaches the replaced provider's listener.
+    if (!mounted || live == _live) return;
     _live = live;
     _sync();
   }

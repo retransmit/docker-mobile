@@ -78,7 +78,7 @@ void main() {
     await pumpEventQueue();
 
     expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(2));
-    expect(n.state.cpuHistory, hasLength(2)); // the history is kept and grows again
+    expect(n.state.cpuHistory, hasLength(1)); // kept; the reopened stream's first sample is dropped
     n.dispose();
   });
 
@@ -107,6 +107,36 @@ void main() {
     await pumpEventQueue();
     expect(t.calls.where((c) => c.method == 'STREAM'), hasLength(1));
     expect(n.state.status, StatsStatus.reconnecting);
+    n.dispose();
+  });
+
+  test('a reopened stream drops its first sample and appends the next', () async {
+    final controllers = <StreamController<List<int>>>[];
+    final t = FakeTransport()
+      ..onStream('/containers/a/stats', (_) {
+        final c = StreamController<List<int>>();
+        controllers.add(c);
+        return c.stream;
+      });
+    final n = StatsNotifier(() => DockerApiClient(t), 'a');
+    controllers.last.add(utf8.encode('${_line(1000000)}\n'));
+    await pumpEventQueue();
+    expect(n.state.cpuHistory, hasLength(1));
+    final shown = n.state.latest;
+
+    n.setLive(false);
+    n.setLive(true);
+    controllers.last.add(utf8.encode('${_line(2000000)}\n')); // no previous CPU reading behind it
+    await pumpEventQueue();
+    expect(n.state.cpuHistory, hasLength(1));
+    expect(n.state.memHistory, hasLength(1));
+    expect(n.state.latest, same(shown));
+
+    controllers.last.add(utf8.encode('${_line(3000000)}\n'));
+    await pumpEventQueue();
+    expect(n.state.cpuHistory, hasLength(2));
+    expect(n.state.memHistory, hasLength(2));
+    expect(n.state.latest, isNot(same(shown)));
     n.dispose();
   });
 }
