@@ -33,9 +33,10 @@ class ProfilesScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profiles = ref.watch(profilesProvider);
-    final (status, sessionProfileId, sessionError) =
-        ref.watch(sessionProvider.select((s) => (s.status, s.profile?.id, s.error)));
-    // While a connect is in flight the screen is busy: only its own row reacts, to cancel it.
+    final (status, sessionProfileId, sessionProfileName, sessionError) =
+        ref.watch(sessionProvider.select((s) => (s.status, s.profile?.id, s.profile?.name, s.error)));
+    // While a connect is in flight the screen is busy: nothing on it reacts but Settings and
+    // the Cancel in the bar at the bottom.
     final connecting = status == SessionStatus.connecting;
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
@@ -49,10 +50,46 @@ class ProfilesScreen extends ConsumerWidget {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: connecting ? null : () => _openEditor(context, ref),
-        child: const Icon(Icons.add),
-      ),
+      // Not shown while connecting: a FAB with a null handler looks enabled.
+      floatingActionButton: connecting
+          ? null
+          : FloatingActionButton(
+              // No hero: when a connect succeeds, this button comes back in the frame that pushes
+              // Home, while the Scaffold still animates the previous one out. Two heroes with one
+              // tag in the route being left is an error.
+              heroTag: null,
+              onPressed: () => _openEditor(context, ref),
+              child: const Icon(Icons.add),
+            ),
+      bottomNavigationBar: connecting
+          ? Material(
+              elevation: 3,
+              color: scheme.surfaceContainerHigh,
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Connecting to ${sessionProfileName ?? 'the daemon'}...',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () => ref.read(sessionProvider.notifier).disconnect(),
+                        child: const Text('Cancel'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            )
+          : null,
       body: AnimatedSwitcher(
         duration: const Duration(milliseconds: 300),
         child: profiles.when(
@@ -97,11 +134,6 @@ class ProfilesScreen extends ConsumerWidget {
                                 Expanded(child: MonoText(p.host, maxLines: 1, overflow: TextOverflow.ellipsis, style: Theme.of(context).textTheme.bodySmall)),
                               ],
                             ),
-                            if (connecting && sessionProfileId == p.id)
-                              Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text('Connecting - tap to cancel', style: Theme.of(context).textTheme.bodySmall),
-                              ),
                             if (status == SessionStatus.disconnected && sessionError != null && sessionProfileId == p.id)
                               Padding(
                                 padding: const EdgeInsets.only(top: 4),
@@ -112,9 +144,7 @@ class ProfilesScreen extends ConsumerWidget {
                               ),
                           ],
                         ),
-                        onTap: connecting
-                            ? (sessionProfileId == p.id ? () => ref.read(sessionProvider.notifier).disconnect() : null)
-                            : () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
+                        onTap: connecting ? null : () { HapticFeedback.lightImpact(); launchConnection(context, ref, p); },
                         trailing: PopupMenuButton<String>(
                           enabled: !connecting,
                           onSelected: (v) async {

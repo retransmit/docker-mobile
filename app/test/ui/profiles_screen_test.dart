@@ -27,12 +27,16 @@ const _a = ConnectionProfile(id: 'a', name: 'Alpha', kind: ConnectionKind.agent,
 const _b = ConnectionProfile(id: 'b', name: 'Beta', kind: ConnectionKind.agent,
     agent: AgentCredentials(baseUri: 'http://b:1', token: 't'));
 
-Future<StubSession> pumpProfiles(WidgetTester tester, SessionState s) async {
+Future<StubSession> pumpProfiles(
+  WidgetTester tester,
+  SessionState s, {
+  List<ConnectionProfile> profiles = const [_a, _b],
+}) async {
   final stub = StubSession(s);
   await tester.pumpWidget(ProviderScope(
     overrides: [
       sessionProvider.overrideWith((ref) => stub),
-      profilesProvider.overrideWith((ref) async => const [_a, _b]),
+      profilesProvider.overrideWith((ref) async => profiles),
     ],
     child: const MaterialApp(home: ProfilesScreen()),
   ));
@@ -123,28 +127,79 @@ void main() {
     expect(find.text('gone'), findsNothing);
   });
 
-  testWidgets('the connecting row shows a spinner and the other rows ignore taps', (tester) async {
+  testWidgets('the connecting row shows a spinner and every row ignores taps', (tester) async {
     final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
     expect(
       find.descendant(of: find.widgetWithText(Card, 'Alpha'), matching: find.byType(CircularProgressIndicator)),
       findsOneWidget,
     );
-    await tester.tap(find.text('Beta'));
-    await tester.pump();
+    expect(
+      find.descendant(of: find.widgetWithText(Card, 'Beta'), matching: find.byType(CircularProgressIndicator)),
+      findsNothing,
+    );
+    for (final name in ['Beta', 'Alpha', 'Alpha']) {
+      await tester.tap(find.text(name));
+      await tester.pump();
+    }
     expect(stub.connects, isEmpty);
-    expect(stub.disconnects, 0);
+    expect(stub.disconnects, 0); // not even its own row cancels: that is the bar's Cancel
   });
 
-  testWidgets('tapping the connecting row cancels the connect', (tester) async {
-    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
+  testWidgets('a second tap on a connecting profile does not cancel it', (tester) async {
+    final store = InMemoryProfileStore();
+    await store.add(_a);
+    await store.add(_b);
+    final held = Completer<Transport>(); // Alpha's handshake
+    final daemon = FakeDaemon();
+    final factory = FakeTransportFactory([held.future]);
+    await pumpListWithSession(tester, store, factory);
+    final container = ProviderScope.containerOf(tester.element(find.byType(ProfilesScreen)));
+    SessionState session() => container.read(sessionProvider);
+
     await tester.tap(find.text('Alpha'));
+    await tester.tap(find.text('Alpha')); // a double tap, before the screen has redrawn
+    await tester.pump();
+    await tester.tap(find.text('Alpha')); // and an impatient one on the row that now shows the spinner
+    await tester.pump();
+    expect(session().status, SessionStatus.connecting);
+    expect(session().profile!.id, 'a');
+    expect(factory.builds, 1);
+
+    // The one attempt is still alive: when its handshake answers it connects and opens Home, once.
+    held.complete(daemon.transport);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(session().status, SessionStatus.connected);
+    expect(session().transport, same(daemon.transport));
+    expect(find.byType(HomeScreen, skipOffstage: false), findsOneWidget);
+  });
+
+  testWidgets('a connect that succeeds while the add button is still on its way out opens Home', (tester) async {
+    final store = InMemoryProfileStore();
+    await store.add(_a);
+    final held = Completer<Transport>();
+    await pumpListWithSession(tester, store, FakeTransportFactory([held.future]));
+
+    await tester.tap(find.text('Alpha'));
+    await tester.pump(); // connecting: the add button starts its 200 ms exit
+    await tester.pump(const Duration(milliseconds: 50));
+    held.complete(FakeDaemon().transport); // the daemon answers before that is over
+    await tester.pump(); // the button is back and Home is pushed in the same frame
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(tester.takeException(), isNull); // no two heroes with one tag on the screen being left
+    expect(find.byType(HomeScreen), findsOneWidget);
+  });
+
+  testWidgets('Cancel in the connecting bar cancels the connect', (tester) async {
+    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
     await tester.pump();
     expect(stub.disconnects, 1);
     expect(stub.connects, isEmpty);
   });
 
-  testWidgets('tapping the connecting row cancels a real connect, and its late handshake changes nothing', (tester) async {
+  testWidgets('Cancel in the connecting bar cancels a real connect, and its late handshake changes nothing', (tester) async {
     final store = InMemoryProfileStore();
     await store.add(_a);
     await store.add(_b);
@@ -162,12 +217,12 @@ void main() {
     await tester.pump();
     expect(session().status, SessionStatus.connecting);
 
-    await tester.tap(find.text('Alpha')); // the connecting row
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
     await tester.pump();
     expect(session().status, SessionStatus.disconnected);
     expect(session().error, isNull);
     expect(find.byType(CircularProgressIndicator), findsNothing);
-    expect(find.text('Connecting - tap to cancel'), findsNothing);
+    expect(find.textContaining('Connecting to'), findsNothing);
     expect(factory.builds, 1);
 
     // The rows take taps again.
@@ -202,7 +257,7 @@ void main() {
 
       await tester.tap(find.text('Alpha')); // hangs
       await tester.pump();
-      await tester.tap(find.text('Alpha')); // cancelled from its row
+      await tester.tap(find.widgetWithText(TextButton, 'Cancel')); // cancelled from the bar
       await tester.pump();
       await tester.tap(find.text('Beta')); // connects and opens Home
       await tester.pump();
@@ -228,13 +283,48 @@ void main() {
     });
   }
 
-  testWidgets('the add button and the row menus are off while connecting', (tester) async {
-    await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
-    await tester.tap(find.byType(FloatingActionButton));
+  testWidgets('the connecting bar names the profile and the add button is gone while connecting', (tester) async {
+    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
+    expect(find.text('Connecting to Alpha...'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Cancel'), findsOneWidget);
+    expect(find.byType(FloatingActionButton), findsNothing);
+    expect(find.text('Connecting - tap to cancel'), findsNothing); // the row no longer carries a hint
+
+    // A connect without a profile cannot happen in the session; the bar still reads well.
+    stub.setState(const SessionState(status: SessionStatus.connecting));
+    await tester.pump();
+    expect(find.text('Connecting to the daemon...'), findsOneWidget);
+
+    stub.setState(const SessionState());
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byType(ConnectionScreen), findsNothing);
+    expect(find.textContaining('Connecting to'), findsNothing);
+    expect(find.widgetWithText(TextButton, 'Cancel'), findsNothing);
+    expect(find.byType(FloatingActionButton), findsOneWidget);
+  });
 
+  testWidgets('the connecting bar stays in view when the connecting row is far down the list', (tester) async {
+    final many = [
+      for (var i = 1; i <= 30; i++)
+        ConnectionProfile(id: 'p$i', name: 'Host $i', kind: ConnectionKind.agent,
+            agent: AgentCredentials(baseUri: 'http://h$i:1', token: 't')),
+    ];
+    final stub = await pumpProfiles(
+      tester,
+      SessionState(status: SessionStatus.connecting, profile: many.last),
+      profiles: many,
+    );
+    expect(find.text('Host 1'), findsOneWidget);
+    expect(find.text('Host 30'), findsNothing); // its row, and the spinner on it, are below the fold
+    expect(find.text('Connecting to Host 30...').hitTestable(), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pump();
+    expect(stub.disconnects, 1);
+  });
+
+  testWidgets('the row menus are off while connecting', (tester) async {
+    await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
     for (final menu in [find.byType(PopupMenuButton<String>).first, find.byType(PopupMenuButton<String>).last]) {
       await tester.tap(menu);
       await tester.pump();
@@ -255,18 +345,6 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(find.byType(ConnectionScreen), findsNothing);
-  });
-
-  testWidgets('the connecting row says how to cancel', (tester) async {
-    final stub = await pumpProfiles(tester, const SessionState(status: SessionStatus.connecting, profile: _a));
-    final hint = find.text('Connecting - tap to cancel');
-    expect(hint, findsOneWidget);
-    expect(find.descendant(of: find.widgetWithText(Card, 'Alpha'), matching: hint), findsOneWidget);
-    expect(tester.widget<Text>(hint).style, Theme.of(tester.element(hint)).textTheme.bodySmall);
-
-    stub.setState(const SessionState());
-    await tester.pump();
-    expect(hint, findsNothing);
   });
 
   testWidgets('no inline error while the session is reconnecting or failed', (tester) async {
