@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/session/events_hub.dart';
 import 'package:docker_mobile/src/session/lifecycle_source.dart';
 import 'package:docker_mobile/src/session/reconnect_policy.dart';
 import 'package:docker_mobile/src/session/transport_factory.dart';
@@ -66,7 +67,8 @@ class FakeTransportFactory implements TransportFactory {
     profiles.add(profile);
     if (_results.isEmpty) throw StateError('FakeTransportFactory: no result queued for build #$builds');
     final r = _results.removeAt(0);
-    final Object v = r is Future ? await r as Object : r;
+    final Object? v = r is Future ? await r : r;
+    if (v == null) throw StateError('FakeTransportFactory: queued result completed with null');
     if (v is BuiltTransport) return v;
     if (v is Transport) return BuiltTransport(v);
     throw v;
@@ -97,7 +99,8 @@ class FakeDaemon {
   /// The most recently opened events stream.
   StreamController<List<int>> get events => eventStreams.last;
 
-  List<RecordedCall> get eventOpens => transport.calls.where((c) => c.method == 'STREAM').toList();
+  List<RecordedCall> get eventOpens =>
+      transport.calls.where((c) => c.method == 'STREAM' && c.path.endsWith('/events')).toList();
 }
 
 /// One NDJSON line of a Docker event.
@@ -108,3 +111,17 @@ String eventLine({String type = 'container', String action = 'start', String id 
       'Actor': {'ID': id, 'Attributes': {'name': 'web'}},
       'timeNano': ?timeNano,
     })}\n';
+
+/// Records invalidations as strings: `list:<category>`, `detail:<category>:<id>`, `dashboard`.
+class RecordingInvalidator implements Invalidator {
+  final calls = <String>[];
+
+  @override
+  void list(EventCategory category) => calls.add('list:${category.name}');
+
+  @override
+  void detail(EventCategory category, String id) => calls.add('detail:${category.name}:$id');
+
+  @override
+  void dashboard() => calls.add('dashboard');
+}
