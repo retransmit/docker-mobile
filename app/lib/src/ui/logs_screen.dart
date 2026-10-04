@@ -19,8 +19,8 @@ class LogsScreen extends ConsumerWidget {
       appBar: AppBar(title: Text(containerName)),
       body: inspect.when(
         // The inspect only tells the TTY flag. Once the body is up, a reload or a failed refetch
-        // (a reconnect causes both) must not take the log buffer away; a container that is gone
-        // shows in the stream's own error banner.
+        // must not take the log buffer away; a container that is gone shows in the stream's own
+        // error banner.
         skipLoadingOnReload: true,
         skipError: true,
         loading: () => const Center(child: CircularProgressIndicator()),

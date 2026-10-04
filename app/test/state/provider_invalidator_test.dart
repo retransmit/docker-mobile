@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:docker_mobile/src/api/models/docker_container.dart';
@@ -92,5 +94,23 @@ void main() {
     // Nothing is created for a provider or a family member that was never read.
     expect(c.exists(imagesProvider), isFalse);
     expect(c.exists(containerDetailProvider('b')), isFalse);
+  });
+
+  test('every provider that uses resourceClient is listed in resourceProviders', () {
+    // A provider that takes its client from resourceClient is refreshed after a
+    // reconnect only if `all` knows it. Count the calls in the sources (tests
+    // run with the package root as the working directory).
+    final call = RegExp(r'\bresourceClient\(');
+    final declaration = RegExp(r'^DockerApiClient resourceClient\(', multiLine: true);
+    final callsByFile = <String, int>{};
+    for (final entity in Directory('lib').listSync(recursive: true)) {
+      if (entity is! File || !entity.path.endsWith('.dart')) continue;
+      final source = entity.readAsStringSync();
+      final calls = call.allMatches(source).length - declaration.allMatches(source).length;
+      if (calls > 0) callsByFile[entity.path.replaceAll(r'\', '/')] = calls;
+    }
+    expect(callsByFile.keys, ['lib/src/state/providers.dart'], reason: 'resource providers live next to the list');
+    expect(callsByFile['lib/src/state/providers.dart'], resourceProviders.length,
+        reason: 'calls of resourceClient versus entries in resourceProviders');
   });
 }

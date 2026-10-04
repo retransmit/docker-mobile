@@ -1,7 +1,12 @@
+import 'dart:convert';
+
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_error.dart';
+import 'package:docker_mobile/src/session/reconnect_policy.dart';
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
@@ -17,10 +22,11 @@ const _oneContainer = '[{"Id":"c1","Names":["/web"],"Image":"nginx","State":"run
 
 /// A container over the real session. The session takes [daemons] in order:
 /// the first on connect, the next on every reconnect or new connection.
-ProviderContainer _container(List<FakeDaemon> daemons) {
+/// Reconnects are immediate unless [policy] says otherwise.
+ProviderContainer _container(List<FakeDaemon> daemons, {ReconnectPolicy? policy}) {
   final c = ProviderContainer(overrides: [
     transportFactoryProvider.overrideWithValue(FakeTransportFactory([for (final d in daemons) d.transport])),
-    reconnectPolicyProvider.overrideWithValue(immediatePolicy()),
+    reconnectPolicyProvider.overrideWithValue(policy ?? immediatePolicy()),
     lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
     profileStoreProvider.overrideWithValue(InMemoryProfileStore()),
   ]);
@@ -127,6 +133,64 @@ void main() {
     expect(v.isRefreshing, isFalse);
     expect(_shown(v), 'loading');
     expect(_gets(d2, '/containers/json'), 1);
+  });
+
+  test('a provider nobody listens to reloads on its next read after a new connection', () async {
+    final d1 = FakeDaemon(), d2 = FakeDaemon();
+    d1.transport.onGet(RegExp(r'/containers/json$'), (_) => http.Response(_oneContainer, 200));
+    d2.transport.hangOn('GET', RegExp(r'/containers/json'));
+    final c = _container([d1, d2]);
+    final session = c.read(sessionProvider.notifier);
+    await session.connect(_profileA);
+    expect(await c.read(containersProvider.future), hasLength(1));
+
+    await session.disconnect();
+    await session.connect(_profileB);
+    await pumpEventQueue();
+    expect(c.read(sessionProvider).transport, same(d2.transport));
+    // Nobody listens, so the new connection alone fetches nothing.
+    expect(_gets(d2, '/containers/json'), 0);
+
+    final v = c.read(containersProvider);
+    expect(_shown(v), 'loading', reason: 'the state is $v');
+    expect(_gets(d2, '/containers/json'), 1);
+  });
+
+  test('a refresh pending when the connection is lost never runs: the list stays up until the reconnect', () {
+    fakeAsync((async) {
+      final d1 = FakeDaemon(), d2 = FakeDaemon();
+      for (final d in [d1, d2]) {
+        d.transport.onGet(RegExp(r'/containers/json$'), (_) => http.Response(_oneContainer, 200));
+      }
+      // The first retry comes well after the refresh debounce (0.5 s).
+      final c = _container([d1, d2], policy: ReconnectPolicy(base: const Duration(seconds: 5), jitter: 0));
+      final seen = <String>[];
+      c.listen(containersProvider, (_, next) => seen.add(_phase(next)));
+      c.read(sessionProvider.notifier).connect(_profileA);
+      async.elapse(Duration.zero);
+      expect(_shown(c.read(containersProvider)), 'data');
+      seen.clear();
+
+      // A container dies and the daemon goes away right after it said so.
+      d1.transport.throwOn('GET', RegExp(r'/containers/json$'), const DockerError(DockerErrorKind.network, 'down'));
+      d1.events.add(utf8.encode(eventLine(action: 'die', timeNano: 1700000000000000123)));
+      async.flushMicrotasks();
+      d1.events.addError(const DockerError(DockerErrorKind.network, 'reset'));
+      async.flushMicrotasks();
+      expect(c.read(sessionProvider).status, SessionStatus.reconnecting);
+
+      async.elapse(const Duration(seconds: 3));
+      expect(c.read(sessionProvider).status, SessionStatus.reconnecting);
+      expect(seen, isEmpty, reason: 'nothing may be asked of the dead connection');
+      expect(_shown(c.read(containersProvider)), 'data');
+      expect(_gets(d1, '/containers/json'), 1);
+
+      async.elapse(const Duration(seconds: 3));
+      expect(c.read(sessionProvider).transport, same(d2.transport));
+      expect(seen, ['data, refreshing', 'data']);
+      expect(_gets(d2, '/containers/json'), 1);
+      expect(_gets(d1, '/containers/json'), 1);
+    });
   });
 
   test('a reconnect refreshes every resource provider that is listened to and builds none that is not', () async {

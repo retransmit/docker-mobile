@@ -26,17 +26,23 @@ ConnectionProfile sshProfile({String? pin}) => ConnectionProfile(id: 's', name: 
 
 const _down = DockerError(DockerErrorKind.network, 'down');
 
+/// Fails the full refresh; everything else is recorded.
+class _ThrowingInvalidator extends RecordingInvalidator {
+  @override
+  void all() => throw StateError('refresh failed');
+}
+
 class _Harness {
-  _Harness(List<Object> builds)
+  _Harness(List<Object> builds, {ReconnectPolicy? policy, RecordingInvalidator? invalidator})
       : factory = FakeTransportFactory(builds),
         lifecycle = ManualLifecycleSource(),
-        invalidator = RecordingInvalidator(),
+        invalidator = invalidator ?? RecordingInvalidator(),
         store = InMemoryProfileStore() {
     session = DockerSession(
       transportFactory: factory,
-      policy: ReconnectPolicy(jitter: 0),
+      policy: policy ?? ReconnectPolicy(jitter: 0),
       lifecycle: lifecycle,
-      invalidator: invalidator,
+      invalidator: this.invalidator,
       profileStore: store,
       onEvent: events.add,
       onNewSession: () => newSessions++,
@@ -421,6 +427,50 @@ void main() {
         expect(h.s.status, SessionStatus.reconnecting);
         expect(h.s.attempt, 2);
         expect(h.invalidator.calls, isNot(contains('all')));
+      });
+    });
+
+    test('refreshes pending when the stream is lost are dropped; the reconnect refreshes everything', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final d2 = FakeDaemon();
+        // The first retry comes after every debounce window (0.5 s for lists and details, 2 s for the dashboard).
+        final h = _Harness(
+          [d1.transport, d2.transport],
+          policy: ReconnectPolicy(base: const Duration(seconds: 5), jitter: 0),
+        );
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        d1.events.add(utf8.encode(eventLine(action: 'die', timeNano: 1700000000000000123)));
+        async.flushMicrotasks();
+        expect(h.events, hasLength(1));
+        d1.events.addError(const SocketException('reset'));
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+
+        async.elapse(const Duration(seconds: 3));
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.invalidator.calls, isEmpty);
+
+        async.elapse(const Duration(seconds: 2));
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d2.transport));
+        expect(d2.eventOpens.single.query, {'since': '1700000000.000000123'});
+        async.elapse(const Duration(seconds: 3));
+        expect(h.invalidator.calls, ['all']);
+      });
+    });
+
+    test('a refresh that throws after a reconnect leaves the new transport open', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final d2 = FakeDaemon();
+        final h = _Harness([d1.transport, d2.transport], invalidator: _ThrowingInvalidator());
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d2.transport));
+        expect(d2.transport.closed, isFalse);
       });
     });
   });

@@ -167,7 +167,8 @@ class DockerSession extends StateNotifier<SessionState> {
   /// The events stream died (error or clean end): start reconnecting.
   void livenessLost(DockerError error) {
     if (!mounted || state.status != SessionStatus.connected) return;
-    _hub.pause();
+    // Drop pending refreshes too: they would hit the dead connection, and a reconnect refreshes everything.
+    _hub.stop();
     state = state.copyWith(status: SessionStatus.reconnecting, attempt: 1, error: error);
     _scheduleAttempt();
   }
@@ -250,6 +251,8 @@ class DockerSession extends StateNotifier<SessionState> {
         attempt: 0,
         clearError: true,
       );
+      // Adopted: the catch below must not close it.
+      built = null;
       unawaited(_closeQuietly(old));
       // What is on screen was fetched over the old transport: refresh it in place.
       _invalidator.all();
