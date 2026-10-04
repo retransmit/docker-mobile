@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 import 'create_container_screen.dart';
+import 'route_is_open.dart';
 import 'widgets/error_view.dart';
 
 class ImageDetailScreen extends ConsumerWidget {
@@ -69,7 +70,7 @@ class ImageDetailScreen extends ConsumerWidget {
                   final opts = await _removeImageDialog(context);
                   if (opts != null && client != null && context.mounted) {
                     await run(() => client.removeImage(imageId, force: opts.$1, noprune: opts.$2), 'Removed');
-                    if (context.mounted) Navigator.of(context).pop();
+                    if (context.mounted && routeIsOpen(context)) Navigator.of(context).pop();
                   }
                 },
                 child: const Text('Remove'),

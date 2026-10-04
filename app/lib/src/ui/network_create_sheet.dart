@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models/docker_network.dart';
 import '../state/providers.dart';
+import 'route_is_open.dart';
 import 'widgets/key_value_editor.dart';
 
 class _SubnetRow {
@@ -69,8 +70,9 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
         labels: _labels,
         options: _options,
       );
+      if (!mounted) return;
       ref.invalidate(networksProvider);
-      navigator.pop();
+      if (routeIsOpen(context)) navigator.pop();
       messenger.showSnackBar(const SnackBar(content: Text('Network created')));
     } catch (e) {
       if (mounted) setState(() => _busy = false); // sheet may be popped mid-flight

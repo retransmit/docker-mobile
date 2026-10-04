@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
+import '../route_is_open.dart';
 import '../widgets/app_text_field.dart';
 
 class SshForm extends ConsumerStatefulWidget {
@@ -99,7 +100,8 @@ class _SshFormState extends ConsumerState<SshForm> {
     final p = _build();
     if (p == null) return;
     final navigator = Navigator.of(context);
-    if (!await _persistOnce(p)) return;
+    await _persistOnce(p);
+    if (!mounted || !routeIsOpen(context)) return;
     navigator.pop();
   }
 
@@ -110,17 +112,17 @@ class _SshFormState extends ConsumerState<SshForm> {
     final p = _build();
     if (p == null) return;
     final navigator = Navigator.of(context);
-    if (!await _persistOnce(p)) return;
+    await _persistOnce(p);
+    if (!mounted || !routeIsOpen(context)) return;
     navigator.pop(p);
   }
 
   /// Saves [p]; further taps are ignored from here on (the editor is closing).
   /// A failed save lets the user try again and rethrows.
-  Future<bool> _persistOnce(ConnectionProfile p) async {
+  Future<void> _persistOnce(ConnectionProfile p) async {
     _saving = true;
     try {
       await _persist(p);
-      return true;
     } catch (_) {
       _saving = false;
       rethrow;

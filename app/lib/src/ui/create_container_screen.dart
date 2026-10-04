@@ -8,6 +8,7 @@ import '../api/models/container_create_config.dart';
 import '../api/models/pull_event.dart';
 import '../state/providers.dart';
 import 'pull_sheet.dart' show parseImageRef;
+import 'route_is_open.dart';
 import 'widgets/app_text_field.dart';
 import 'widgets/key_value_editor.dart';
 import 'widgets/port_mapping_editor.dart';
@@ -118,7 +119,7 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
       messenger.showSnackBar(SnackBar(
         content: Text(startError == null ? 'Container created.' : 'Created, but failed to start: $startError'),
       ));
-      navigator.pop();
+      if (routeIsOpen(context)) navigator.pop();
     } catch (e) {
       if (mounted) setState(() => _busy = false);
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -236,10 +237,10 @@ class _PullProgressDialogState extends State<_PullProgressDialog> {
         }
       }),
       onError: (Object e) {
-        if (mounted) Navigator.of(context).pop(false);
+        if (mounted && routeIsOpen(context)) Navigator.of(context).pop(false);
       },
       onDone: () {
-        if (mounted) Navigator.of(context).pop(_error == null);
+        if (mounted && routeIsOpen(context)) Navigator.of(context).pop(_error == null);
       },
     );
   }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,10 +9,11 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/ui/create_container_screen.dart';
 
 import '../support/fake_transport.dart';
+import '../support/held_transport.dart';
 
-FakeTransport createFake({int createStatus = 201}) {
+FakeTransport createFake({int createStatus = 201, FakeTransport? base}) {
   var status = createStatus;
-  return FakeTransport()
+  return (base ?? FakeTransport())
     ..onGet('/networks', (_) => http.Response('[]', 200))
     ..onPost('/containers/abc/start', (_) => http.Response('', 204))
     ..onPost('/containers/create', (_) {
@@ -62,5 +64,40 @@ void main() {
     await tester.pumpAndSettle();
     // create was attempted twice (404 then 201)
     expect(t.posts.where((p) => p.path == '/containers/create').length, 2);
+  });
+
+  testWidgets('a screen closed underneath a pending create does not close the screen below', (tester) async {
+    final t = HeldTransport();
+    await pumpOverFirstRoute(tester, createFake(base: t), const CreateContainerScreen(image: 'nginx'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Create')); // the create is now in flight
+
+    popToFirstRoute(tester); // the screen is on its way out, and still mounted until its transition ends
+    t.release();
+    await tester.pumpAndSettle();
+
+    expect(t.posts.map((p) => p.path), contains('/containers/create')); // the create did answer
+    expect(find.text('first'), findsOneWidget);
+  });
+
+  testWidgets('a pull dialog closed underneath does not close the screen below when its stream ends', (tester) async {
+    final pull = StreamController<List<int>>(); // a pull that stays open
+    final t = createFake(createStatus: 404)..onPostStream(RegExp(r'/images/create'), (_) => pull.stream);
+    await pumpOverFirstRoute(tester, t, const CreateContainerScreen(image: 'nginx'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Create'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Pull'));
+    // The dialog's spinner never settles: pump its transition by hand.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.text('Pulling image'), findsOneWidget);
+
+    popToFirstRoute(tester); // dialog and screen are on their way out, still mounted
+    unawaited(pull.close()); // the pull ends, as it does when the transport is closed
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Pulling image'), findsNothing);
+    expect(find.text('first'), findsOneWidget);
   });
 }

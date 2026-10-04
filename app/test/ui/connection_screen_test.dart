@@ -157,6 +157,24 @@ void main() {
       expect(host.results.single, isNull);
       expect(host.stub.connects, isEmpty);
     });
+
+    for (final label in ['Save', 'Save & Connect']) {
+      testWidgets('an editor closed underneath a pending $label does not close the screen below (${kind.name})',
+          (tester) async {
+        final store = _SlowStore();
+        final host = await _openFromHost(tester, store);
+        final button = await _fill(tester, kind, button: label);
+
+        await tester.tap(button); // the save is now running
+        // The editor is on its way out, and still mounted until its transition ends.
+        tester.state<NavigatorState>(find.byType(Navigator)).popUntil((r) => r.isFirst);
+        await tester.pumpAndSettle();
+
+        expect(await store.list(), hasLength(1)); // the save went through
+        expect(find.text('open'), findsOneWidget);
+        expect(host.results.single, isNull); // closed, not finished: nothing is handed back
+      });
+    }
   }
 
   testWidgets('a failed save keeps the editor open and can be tried again', (tester) async {
