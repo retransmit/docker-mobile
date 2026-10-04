@@ -192,6 +192,28 @@ void main() {
       });
     });
 
+    test('a host-key mismatch from a superseded connect is swallowed', () {
+      fakeAsync((async) {
+        final pending = Completer<BuiltTransport>();
+        final h = _Harness([pending.future]);
+        Object? error;
+        var completed = false;
+        h.session.connect(sshProfile(pin: 'FP-OLD')).then((_) {
+          completed = true;
+        }, onError: (Object e) {
+          error = e;
+        });
+        async.flushMicrotasks();
+        h.session.disconnect();
+        async.flushMicrotasks();
+        pending.completeError(const HostKeyMismatchException('FP'));
+        async.flushMicrotasks();
+        expect(error, isNull);
+        expect(completed, isTrue);
+        expect(h.s.status, SessionStatus.disconnected);
+      });
+    });
+
     test('connecting to another profile closes the previous transport and starts a new session', () {
       fakeAsync((async) {
         final d1 = FakeDaemon();

@@ -73,6 +73,13 @@ final dockerClientProvider = Provider<DockerApiClient?>((ref) {
 });
 
 /// Maps event categories to the providers that show them.
+///
+/// Invalidates through [Ref.container] rather than the [Ref] itself: the ref
+/// belongs to [sessionProvider], and the resource providers depend back on it
+/// (via [dockerClientProvider] and [transportProvider]), so `Ref.invalidate`'s
+/// debug dependency assert would build the target and throw a
+/// CircularDependencyError. The container skips that assert and ignores
+/// providers that were never created (no fetch for unseen detail ids).
 class ProviderInvalidator implements Invalidator {
   final Ref _ref;
   ProviderInvalidator(this._ref);
@@ -81,13 +88,13 @@ class ProviderInvalidator implements Invalidator {
   void list(EventCategory category) {
     switch (category) {
       case EventCategory.container:
-        _ref.invalidate(containersProvider);
+        _ref.container.invalidate(containersProvider);
       case EventCategory.image:
-        _ref.invalidate(imagesProvider);
+        _ref.container.invalidate(imagesProvider);
       case EventCategory.network:
-        _ref.invalidate(networksProvider);
+        _ref.container.invalidate(networksProvider);
       case EventCategory.volume:
-        _ref.invalidate(volumesProvider);
+        _ref.container.invalidate(volumesProvider);
       case EventCategory.other:
         break;
     }
@@ -97,9 +104,9 @@ class ProviderInvalidator implements Invalidator {
   void detail(EventCategory category, String id) {
     switch (category) {
       case EventCategory.container:
-        _ref.invalidate(containerDetailProvider(id));
+        _ref.container.invalidate(containerDetailProvider(id));
       case EventCategory.image:
-        _ref.invalidate(imageDetailProvider(id));
+        _ref.container.invalidate(imageDetailProvider(id));
       case EventCategory.network:
       case EventCategory.volume:
       case EventCategory.other:
@@ -108,7 +115,7 @@ class ProviderInvalidator implements Invalidator {
   }
 
   @override
-  void dashboard() => _ref.invalidate(systemDashboardProvider);
+  void dashboard() => _ref.container.invalidate(systemDashboardProvider);
 }
 
 /// The container list for the current connection.

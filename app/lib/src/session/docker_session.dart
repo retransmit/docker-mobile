@@ -89,8 +89,9 @@ class DockerSession extends StateNotifier<SessionState> {
   bool _current(int gen) => mounted && gen == _generation;
 
   /// Builds a transport for [profile], probes the daemon and goes live.
-  /// Throws only [HostKeyMismatchException]; other failures leave the
-  /// session disconnected with `state.error` set.
+  /// Throws only [HostKeyMismatchException] (and only while this attempt is
+  /// still current); other failures leave the session disconnected with
+  /// `state.error` set.
   Future<void> connect(ConnectionProfile profile, {String? pinOverride}) async {
     if (state.status == SessionStatus.connecting) return;
     _lifecycleSub ??= _lifecycle.changes.listen(_onLifecycle);
@@ -137,9 +138,9 @@ class DockerSession extends StateNotifier<SessionState> {
       _hub.start();
       if (!state.foreground) _hub.pause();
     } on HostKeyMismatchException {
-      if (_current(gen)) {
-        state = SessionState(profile: profile, sessionId: sessionId, foreground: state.foreground);
-      }
+      // A superseded handshake must not raise the trust dialog.
+      if (!_current(gen)) return;
+      state = SessionState(profile: profile, sessionId: sessionId, foreground: state.foreground);
       rethrow;
     } catch (e) {
       final t = built?.transport;
