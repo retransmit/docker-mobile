@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../state/events_notifier.dart';
+import '../session/session_state.dart';
+import '../state/providers.dart';
 import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
 
@@ -33,8 +34,9 @@ class EventsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(eventsProvider);
-    final notifier = ref.read(eventsProvider.notifier);
+    final state = ref.watch(sessionEventsProvider);
+    final notifier = ref.read(sessionEventsProvider.notifier);
+    final session = ref.watch(sessionProvider.select((s) => (s.status, s.error)));
     final visible = state.visibleEvents;
     return Scaffold(
       appBar: AppBar(title: const Text('Events')),
@@ -55,8 +57,11 @@ class EventsScreen extends ConsumerWidget {
             ),
           ),
           Expanded(
-            child: state.status == EventsStatus.error
-                ? ErrorView(error: state.error ?? 'Event stream failed', onRetry: () => ref.invalidate(eventsProvider))
+            child: session.$1 == SessionStatus.failed
+                ? ErrorView(
+                    error: session.$2 ?? 'Connection lost',
+                    onRetry: () => ref.read(sessionProvider.notifier).retry(),
+                  )
                 : visible.isEmpty
                     ? const EmptyState(
                         icon: Icons.bolt,

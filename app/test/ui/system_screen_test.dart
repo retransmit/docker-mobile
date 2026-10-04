@@ -1,11 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/state/providers.dart';
+import 'package:docker_mobile/src/storage/credential_store.dart';
+import 'package:docker_mobile/src/storage/profile_store.dart';
 import 'package:docker_mobile/src/ui/system_screen.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
+import '../support/fake_session.dart';
 import '../support/fake_transport.dart';
 
 FakeTransport systemFake() => FakeTransport()
@@ -66,10 +72,15 @@ void main() {
   });
 
   testWidgets('Disconnect action confirms then nulls the transport', (tester) async {
-    final t = systemFake();
+    final t = systemFake()
+      ..onGet('/_ping', (_) => http.Response('OK', 200))
+      ..onStream(RegExp(r'/events$'), (_) => StreamController<List<int>>().stream);
     late ProviderContainer container;
     await tester.pumpWidget(ProviderScope(
-      overrides: [transportProvider.overrideWith((ref) => t)],
+      overrides: [
+        transportFactoryProvider.overrideWithValue(FakeTransportFactory([t])),
+        lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
+      ],
       child: MaterialApp(
         home: Builder(builder: (ctx) {
           container = ProviderScope.containerOf(ctx);
@@ -83,6 +94,9 @@ void main() {
         }),
       ),
     ));
+    await container.read(sessionProvider.notifier).connect(const ConnectionProfile(
+        id: '1', name: 'A', kind: ConnectionKind.agent, agent: AgentCredentials(baseUri: 'http://h:1', token: 't')));
+    expect(container.read(transportProvider), same(t));
     await tester.tap(find.text('open'));
     await tester.pumpAndSettle();
 
@@ -92,7 +106,9 @@ void main() {
     await tester.tap(find.widgetWithText(TextButton, 'Disconnect'));
     await tester.pumpAndSettle();
 
+    expect(container.read(sessionProvider).status, SessionStatus.disconnected);
     expect(container.read(transportProvider), isNull);
+    expect(t.closed, isTrue);
     expect(find.text('open'), findsOneWidget); // popped back
   });
 }

@@ -8,13 +8,17 @@ import '../api/models/docker_network.dart';
 import '../api/models/docker_volume.dart';
 import '../api/models/image_detail.dart';
 import '../api/models/system_info.dart';
+import '../session/docker_session.dart';
+import '../session/events_hub.dart';
+import '../session/lifecycle_source.dart';
+import '../session/reconnect_policy.dart';
+import '../session/session_state.dart';
+import '../session/transport_factory.dart';
 import '../storage/credential_store.dart';
 import '../storage/profile_store.dart';
 import '../transport/ssh/ssh_connection.dart';
 import '../transport/transport.dart';
-
-/// The active transport, set once the user connects. Null = not connected.
-final transportProvider = StateProvider<Transport?>((ref) => null);
+import 'events_feed.dart';
 
 /// The saved connection profiles store (overridden with an in-memory fake in tests).
 final profileStoreProvider = Provider<ProfileStore>((ref) => SecureProfileStore());
@@ -26,11 +30,86 @@ final profilesProvider = FutureProvider<List<ConnectionProfile>>((ref) => ref.wa
 final sshConnectionFactoryProvider =
     Provider<SshConnection Function(SshCredentials)>((ref) => RealSshConnection.new);
 
-/// The single Docker client, derived from the active transport.
+/// Builds transports from saved profiles (overridden with a fake in tests).
+final transportFactoryProvider = Provider<TransportFactory>(
+  (ref) => TransportFactory(sshConnectionFactory: ref.watch(sshConnectionFactoryProvider)),
+);
+
+/// Backoff for session reconnects and stream supervisors.
+final reconnectPolicyProvider = Provider<ReconnectPolicy>((ref) => ReconnectPolicy());
+
+/// App foreground/background changes (overridden with a manual source in tests).
+final lifecycleSourceProvider = Provider<LifecycleSource>((ref) => AppLifecycleSource());
+
+/// Daemon events seen since the current connection started (newest first).
+final sessionEventsProvider = StateNotifierProvider<EventsFeed, EventsState>((ref) => EventsFeed());
+
+/// The connection to the current daemon: status, transport, reconnects.
+final sessionProvider = StateNotifierProvider<DockerSession, SessionState>((ref) {
+  final feed = ref.read(sessionEventsProvider.notifier);
+  return DockerSession(
+    transportFactory: ref.read(transportFactoryProvider),
+    policy: ref.read(reconnectPolicyProvider),
+    lifecycle: ref.read(lifecycleSourceProvider),
+    invalidator: ProviderInvalidator(ref),
+    profileStore: ref.read(profileStoreProvider),
+    onEvent: feed.add,
+    onNewSession: feed.clear,
+    onProfilesChanged: () => ref.invalidate(profilesProvider),
+  );
+});
+
+/// The active transport, derived from the session. Null = not connected.
+final transportProvider = Provider<Transport?>((ref) => ref.watch(sessionProvider.select((s) => s.transport)));
+
+/// The single Docker client: the session's transport plus its negotiated
+/// API version. A new transport after a reconnect yields a new client, so
+/// every resource provider refetches.
 final dockerClientProvider = Provider<DockerApiClient?>((ref) {
   final transport = ref.watch(transportProvider);
-  return transport == null ? null : DockerApiClient(transport);
+  if (transport == null) return null;
+  final apiVersion = ref.watch(sessionProvider.select((s) => s.apiVersion));
+  return DockerApiClient(transport, apiVersion: apiVersion);
 });
+
+/// Maps event categories to the providers that show them.
+class ProviderInvalidator implements Invalidator {
+  final Ref _ref;
+  ProviderInvalidator(this._ref);
+
+  @override
+  void list(EventCategory category) {
+    switch (category) {
+      case EventCategory.container:
+        _ref.invalidate(containersProvider);
+      case EventCategory.image:
+        _ref.invalidate(imagesProvider);
+      case EventCategory.network:
+        _ref.invalidate(networksProvider);
+      case EventCategory.volume:
+        _ref.invalidate(volumesProvider);
+      case EventCategory.other:
+        break;
+    }
+  }
+
+  @override
+  void detail(EventCategory category, String id) {
+    switch (category) {
+      case EventCategory.container:
+        _ref.invalidate(containerDetailProvider(id));
+      case EventCategory.image:
+        _ref.invalidate(imageDetailProvider(id));
+      case EventCategory.network:
+      case EventCategory.volume:
+      case EventCategory.other:
+        break;
+    }
+  }
+
+  @override
+  void dashboard() => _ref.invalidate(systemDashboardProvider);
+}
 
 /// The container list for the current connection.
 final containersProvider = FutureProvider<List<DockerContainer>>((ref) async {

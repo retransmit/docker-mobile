@@ -1,17 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/connect/disconnect.dart';
+import 'package:docker_mobile/src/session/session_state.dart';
+import 'package:docker_mobile/src/state/providers.dart';
+import 'package:docker_mobile/src/storage/credential_store.dart';
+import 'package:docker_mobile/src/storage/profile_store.dart';
 
-import '../support/fake_transport.dart';
+import '../support/fake_session.dart';
 
 void main() {
-  testWidgets('disconnect pops to the first route, nulls and closes the transport', (tester) async {
-    final fake = FakeTransport();
+  testWidgets('disconnect pops to the first route and closes the session', (tester) async {
+    final d = FakeDaemon();
     late ProviderContainer container;
     await tester.pumpWidget(ProviderScope(
-      overrides: [transportProvider.overrideWith((ref) => fake)],
+      overrides: [
+        transportFactoryProvider.overrideWithValue(FakeTransportFactory([d.transport])),
+        lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
+      ],
       child: MaterialApp(
         home: Builder(builder: (ctx) {
           container = ProviderScope.containerOf(ctx);
@@ -31,14 +37,19 @@ void main() {
         }),
       ),
     ));
+    await container.read(sessionProvider.notifier).connect(const ConnectionProfile(
+        id: '1', name: 'A', kind: ConnectionKind.agent, agent: AgentCredentials(baseUri: 'http://h:1', token: 't')));
+    expect(container.read(sessionProvider).status, SessionStatus.connected);
+
     await tester.tap(find.text('go'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('disconnect'));
     await tester.pumpAndSettle();
 
+    expect(container.read(sessionProvider).status, SessionStatus.disconnected);
     expect(container.read(transportProvider), isNull);
-    expect(fake.closed, isTrue);
-    expect(find.text('go'), findsOneWidget); // back on the first route
+    expect(d.transport.closed, isTrue);
+    expect(find.text('go'), findsOneWidget);
     expect(find.text('disconnect'), findsNothing);
   });
 }
