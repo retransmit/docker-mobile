@@ -39,14 +39,13 @@ class VolumeDetailScreen extends ConsumerWidget {
               ElevatedButton(
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  final navigator = Navigator.of(context);
                   final force = await _removeDialog(context);
                   if (force == null || client == null || !context.mounted) return;
                   try {
                     await client.removeVolume(volumeName, force: force);
                     if (!context.mounted) return;
                     ref.invalidate(volumesProvider);
-                    if (routeIsOpen(context)) navigator.pop();
+                    closeRoute(context);
                     messenger.showSnackBar(const SnackBar(content: Text('Removed')));
                   } catch (e) {
                     messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));

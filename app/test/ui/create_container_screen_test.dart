@@ -79,6 +79,21 @@ void main() {
     expect(find.text('first'), findsOneWidget);
   });
 
+  testWidgets('a screen that was closed during the create shows no "Image not found" dialog', (tester) async {
+    final t = HeldTransport();
+    await pumpOverFirstRoute(
+        tester, createFake(createStatus: 404, base: t), const CreateContainerScreen(image: 'nginx'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Create')); // the create is now in flight
+
+    popToFirstRoute(tester);
+    t.release(); // the daemon answers 404: the image is missing
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.text('Image not found'), findsNothing);
+    expect(find.text('first'), findsOneWidget);
+  });
+
   testWidgets('a pull dialog closed underneath does not close the screen below when its stream ends', (tester) async {
     final pull = StreamController<List<int>>(); // a pull that stays open
     final t = createFake(createStatus: 404)..onPostStream(RegExp(r'/images/create'), (_) => pull.stream);

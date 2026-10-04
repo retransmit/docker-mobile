@@ -54,7 +54,6 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
       await client.createNetwork(
@@ -72,7 +71,7 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
       );
       if (!mounted) return;
       ref.invalidate(networksProvider);
-      if (routeIsOpen(context)) navigator.pop();
+      closeRoute(context);
       messenger.showSnackBar(const SnackBar(content: Text('Network created')));
     } catch (e) {
       if (mounted) setState(() => _busy = false); // sheet may be popped mid-flight

@@ -113,6 +113,21 @@ void main() {
     expect(find.text('second'), findsOneWidget);
   });
 
+  testWidgets('a finished create closes the sheet and the dropdown that is open on top of it', (tester) async {
+    final t = await _startCreate(tester);
+    await tester.pump();
+    await tester.tap(find.byType(DropdownButton<String>)); // its menu is a route of its own
+    await tester.pumpAndSettle();
+    expect(find.text('overlay'), findsWidgets); // the menu is open
+
+    t.release();
+    await tester.pumpAndSettle();
+    expect(find.text('overlay', skipOffstage: false), findsNothing);
+    expect(find.byType(NetworkCreateSheet, skipOffstage: false), findsNothing);
+    expect(find.text('first'), findsOneWidget);
+    expect(find.text('Network created'), findsOneWidget);
+  });
+
   testWidgets('a create that answers after the sheet is gone reports no failure', (tester) async {
     final t = await _startCreate(tester);
     popToFirstRoute(tester);

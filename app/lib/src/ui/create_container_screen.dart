@@ -72,7 +72,6 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
 
   Future<void> _create() async {
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     final image = _image.text.trim();
@@ -90,7 +89,8 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
         id = await client.createContainer(config, name: name.isEmpty ? null : name);
       } on DockerError catch (e) {
         if (e.statusCode != 404 && !e.message.contains('No such image')) rethrow;
-        if (!mounted) return;
+        // A screen that was closed meanwhile must not open a dialog over whatever is underneath.
+        if (!mounted || !routeIsOpen(context)) return;
         final pull = await _confirmPull(image);
         if (pull != true) {
           if (mounted) setState(() => _busy = false);
@@ -114,12 +114,12 @@ class _CreateContainerScreenState extends ConsumerState<CreateContainerScreen> {
           startError = '$e';
         }
       }
-      if (!mounted) return; // guard the ref/messenger/navigator after the awaits
+      if (!mounted) return; // guard the ref and the context after the awaits
       ref.invalidate(containersProvider);
       messenger.showSnackBar(SnackBar(
         content: Text(startError == null ? 'Container created.' : 'Created, but failed to start: $startError'),
       ));
-      if (routeIsOpen(context)) navigator.pop();
+      closeRoute(context);
     } catch (e) {
       if (mounted) setState(() => _busy = false);
       messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));
@@ -237,10 +237,10 @@ class _PullProgressDialogState extends State<_PullProgressDialog> {
         }
       }),
       onError: (Object e) {
-        if (mounted && routeIsOpen(context)) Navigator.of(context).pop(false);
+        if (mounted) closeRoute(context, false);
       },
       onDone: () {
-        if (mounted && routeIsOpen(context)) Navigator.of(context).pop(_error == null);
+        if (mounted) closeRoute(context, _error == null);
       },
     );
   }

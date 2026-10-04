@@ -74,6 +74,21 @@ void main() {
     expect(find.text('open'), findsOneWidget);
   });
 
+  testWidgets('a finished remove closes its own screen and what is on top of it', (tester) async {
+    final t = await _startRemove(tester);
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+    navigator.push<void>(MaterialPageRoute(builder: (_) => const Scaffold(body: Text('on top'))));
+    await tester.pumpAndSettle();
+    expect(find.text('on top'), findsOneWidget);
+
+    t.release();
+    await tester.pumpAndSettle();
+    expect(find.text('on top', skipOffstage: false), findsNothing);
+    expect(find.byType(NetworkDetailScreen, skipOffstage: false), findsNothing);
+    expect(find.text('open'), findsOneWidget); // the screen below is on top again
+    expect(find.text('Removed'), findsOneWidget);
+  });
+
   testWidgets('a remove that answers after the screen is gone reports no failure', (tester) async {
     final t = await _startRemove(tester);
     popToFirstRoute(tester);

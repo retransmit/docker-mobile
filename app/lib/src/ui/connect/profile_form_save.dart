@@ -1,4 +1,3 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/providers.dart';
@@ -21,10 +20,9 @@ mixin ProfileFormSave<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     if (_saving) return;
     final p = buildProfile();
     if (p == null) return;
-    final navigator = Navigator.of(context);
     await _persistOnce(p);
-    if (!mounted || !routeIsOpen(context)) return;
-    navigator.pop();
+    if (!mounted) return;
+    closeRoute(context);
   }
 
   /// Saves and returns the profile to the Connections list, which connects
@@ -33,10 +31,9 @@ mixin ProfileFormSave<T extends ConsumerStatefulWidget> on ConsumerState<T> {
     if (_saving) return;
     final p = buildProfile();
     if (p == null) return;
-    final navigator = Navigator.of(context);
     await _persistOnce(p);
-    if (!mounted || !routeIsOpen(context)) return;
-    navigator.pop(p);
+    if (!mounted) return;
+    closeRoute(context, p);
   }
 
   /// Saves [p]; further taps are ignored from here on (the editor is closing).

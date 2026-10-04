@@ -46,7 +46,6 @@ class NetworkDetailScreen extends ConsumerWidget {
               ElevatedButton(
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  final navigator = Navigator.of(context);
                   final ok = await showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(
@@ -63,7 +62,7 @@ class NetworkDetailScreen extends ConsumerWidget {
                     await client.removeNetwork(networkId);
                     if (!context.mounted) return;
                     ref.invalidate(networksProvider);
-                    if (routeIsOpen(context)) navigator.pop();
+                    closeRoute(context);
                     messenger.showSnackBar(const SnackBar(content: Text('Removed')));
                   } catch (e) {
                     messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));

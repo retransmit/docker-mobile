@@ -70,7 +70,7 @@ class ImageDetailScreen extends ConsumerWidget {
                   final opts = await _removeImageDialog(context);
                   if (opts != null && client != null && context.mounted) {
                     await run(() => client.removeImage(imageId, force: opts.$1, noprune: opts.$2), 'Removed');
-                    if (context.mounted && routeIsOpen(context)) Navigator.of(context).pop();
+                    if (context.mounted) closeRoute(context);
                   }
                 },
                 child: const Text('Remove'),

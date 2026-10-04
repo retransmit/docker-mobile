@@ -36,7 +36,6 @@ class _VolumeCreateSheetState extends ConsumerState<VolumeCreateSheet> {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
       await client.createVolume(
@@ -47,7 +46,7 @@ class _VolumeCreateSheetState extends ConsumerState<VolumeCreateSheet> {
       );
       if (!mounted) return;
       ref.invalidate(volumesProvider);
-      if (routeIsOpen(context)) navigator.pop();
+      closeRoute(context);
       messenger.showSnackBar(const SnackBar(content: Text('Volume created')));
     } catch (e) {
       if (mounted) setState(() => _busy = false);
