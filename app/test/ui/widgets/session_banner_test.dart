@@ -43,6 +43,33 @@ void main() {
     expect(stub.disconnects, 1);
   });
 
+  testWidgets('a long failure message is cut short, so the strip stays small on a narrow screen', (tester) async {
+    tester.view.physicalSize = const Size(360, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final message = 'Cannot reach the daemon: ${'no route to host, ' * 12}giving up'; // longer than any clipped error
+    final stub = await pumpBanner(tester, SessionState(
+      status: SessionStatus.failed,
+      error: DockerError(DockerErrorKind.network, message),
+    ));
+    expect(find.text(message), findsOneWidget);
+    expect(tester.getSize(find.byType(SessionBanner)).height, lessThanOrEqualTo(120));
+    // Both actions are still on screen and work.
+    await tester.tap(find.text('Retry'));
+    expect(stub.retries, 1);
+    expect(find.text('Disconnect').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('showsFor says for every status whether the banner draws anything', (tester) async {
+    final stub = await pumpBanner(tester, const SessionState());
+    for (final status in SessionStatus.values) {
+      stub.setState(SessionState(status: status, attempt: 1));
+      await tester.pump();
+      final drawn = tester.getSize(find.byType(SessionBanner)).height > 0;
+      expect(SessionBanner.showsFor(status), drawn, reason: status.name);
+    }
+  });
+
   testWidgets('the host shows the banner above a pushed route and Disconnect pops to the first route', (tester) async {
     final key = GlobalKey<NavigatorState>();
     final stub = StubSession(const SessionState(

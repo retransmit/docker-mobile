@@ -21,6 +21,15 @@ class ProfilesScreen extends ConsumerWidget {
         ConnectionKind.ssh => Icons.terminal,
       };
 
+  /// Opens the editor. "Save & Connect" there returns the saved profile; the
+  /// connect runs here so its progress and any error show on the list.
+  Future<void> _openEditor(BuildContext context, WidgetRef ref, {ConnectionProfile? editing}) async {
+    final saved = await Navigator.of(context).push<ConnectionProfile>(
+      MaterialPageRoute(builder: (_) => ConnectionScreen(editing: editing)),
+    );
+    if (saved != null && context.mounted) await launchConnection(context, ref, saved);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profiles = ref.watch(profilesProvider);
@@ -39,7 +48,7 @@ class ProfilesScreen extends ConsumerWidget {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConnectionScreen())),
+        onPressed: () => _openEditor(context, ref),
         child: const Icon(Icons.add),
       ),
       body: AnimatedSwitcher(
@@ -55,7 +64,7 @@ class ProfilesScreen extends ConsumerWidget {
                 title: 'No connections',
                 message: 'Add a Docker host to get started.',
                 action: FilledButton.icon(
-                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ConnectionScreen())),
+                  onPressed: () => _openEditor(context, ref),
                   icon: const Icon(Icons.add),
                   label: const Text('Add connection'),
                 ),
@@ -67,8 +76,8 @@ class ProfilesScreen extends ConsumerWidget {
                       child: ListTile(
                         leading: connecting && session.profile?.id == p.id
                             ? const SizedBox(
-                                width: 40,
-                                height: 40,
+                                width: 44,
+                                height: 44,
                                 child: Center(
                                   child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
                                 ),
@@ -102,7 +111,7 @@ class ProfilesScreen extends ConsumerWidget {
                         trailing: PopupMenuButton<String>(
                           onSelected: (v) async {
                             if (v == 'edit') {
-                              await Navigator.of(context).push(MaterialPageRoute(builder: (_) => ConnectionScreen(editing: p)));
+                              await _openEditor(context, ref, editing: p);
                             } else if (v == 'delete') {
                               await ref.read(profileStoreProvider).delete(p.id);
                               ref.invalidate(profilesProvider);

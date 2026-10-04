@@ -13,6 +13,9 @@ class SessionBanner extends ConsumerWidget {
   /// [SessionBannerHost]); otherwise the nearest navigator is used.
   final GlobalKey<NavigatorState>? navigatorKey;
 
+  /// Whether the banner shows anything for [status].
+  static bool showsFor(SessionStatus status) => status == SessionStatus.reconnecting || status == SessionStatus.failed;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final (status, attempt, error) = ref.watch(sessionProvider.select((s) => (s.status, s.attempt, s.error)));
@@ -55,6 +58,8 @@ class SessionBanner extends ConsumerWidget {
                   Expanded(
                     child: Text(
                       error?.message ?? 'Connection lost',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: scheme.onErrorContainer),
                     ),
                   ),
@@ -90,8 +95,7 @@ class SessionBannerHost extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final status = ref.watch(sessionProvider.select((s) => s.status));
-    final visible = status == SessionStatus.reconnecting || status == SessionStatus.failed;
+    final visible = ref.watch(sessionProvider.select((s) => SessionBanner.showsFor(s.status)));
     return Column(
       children: [
         SessionBanner(navigatorKey: navigatorKey),

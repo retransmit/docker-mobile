@@ -7,9 +7,11 @@ import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 import 'package:docker_mobile/src/ui/connection_screen.dart';
+import 'package:docker_mobile/src/ui/home_screen.dart';
 import 'package:docker_mobile/src/ui/profiles_screen.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 
+import '../support/fake_session.dart';
 import '../support/stub_session.dart';
 
 Widget _wrap(ProfileStore store) => ProviderScope(
@@ -34,6 +36,43 @@ Future<StubSession> pumpProfiles(WidgetTester tester, SessionState s) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 400));
   return stub;
+}
+
+/// The list over [store] with a stub session: connects are only recorded.
+Future<StubSession> pumpList(WidgetTester tester, ProfileStore store) async {
+  final stub = StubSession(const SessionState());
+  await tester.pumpWidget(ProviderScope(
+    overrides: [
+      profileStoreProvider.overrideWithValue(store),
+      sessionProvider.overrideWith((ref) => stub),
+    ],
+    child: const MaterialApp(home: ProfilesScreen()),
+  ));
+  await tester.pumpAndSettle();
+  return stub;
+}
+
+/// The list over [store] with a real session whose transports come from [factory].
+Future<void> pumpListWithSession(WidgetTester tester, ProfileStore store, FakeTransportFactory factory) async {
+  await tester.pumpWidget(ProviderScope(
+    overrides: [
+      profileStoreProvider.overrideWithValue(store),
+      transportFactoryProvider.overrideWithValue(factory),
+      lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
+    ],
+    child: const MaterialApp(home: ProfilesScreen()),
+  ));
+  await tester.pumpAndSettle();
+}
+
+/// Names the agent profile in the open editor 'home' and taps [button].
+Future<void> fillEditorAndTap(WidgetTester tester, String button) async {
+  await tester.enterText(find.widgetWithText(TextField, 'Name'), 'home');
+  await tester.enterText(find.widgetWithText(TextField, 'Host / IP'), '10.0.0.2');
+  final finder = find.widgetWithText(button == 'Save' ? OutlinedButton : FilledButton, button);
+  await tester.ensureVisible(finder);
+  await tester.pumpAndSettle();
+  await tester.tap(finder);
 }
 
 void main() {
@@ -115,5 +154,112 @@ void main() {
     await tester.tap(find.text('Alpha'));
     await tester.pump();
     expect(stub.connects.single.id, 'a');
+  });
+
+  testWidgets('the spinner replaces the avatar without moving the row', (tester) async {
+    final stub = await pumpProfiles(tester, const SessionState());
+    final row = find.widgetWithText(Card, 'Alpha');
+    final title = tester.getTopLeft(find.text('Alpha'));
+    final size = tester.getSize(row);
+    expect(find.descendant(of: row, matching: find.byType(LeadingAvatar)), findsOneWidget);
+
+    stub.setState(const SessionState(status: SessionStatus.connecting, profile: _a));
+    await tester.pump();
+    expect(find.descendant(of: row, matching: find.byType(LeadingAvatar)), findsNothing);
+    expect(find.descendant(of: row, matching: find.byType(CircularProgressIndicator)), findsOneWidget);
+    expect(tester.getTopLeft(find.text('Alpha')), title);
+    expect(tester.getSize(row), size);
+  });
+
+  testWidgets('Save & Connect from the editor connects on the list', (tester) async {
+    final store = InMemoryProfileStore();
+    final stub = await pumpList(tester, store);
+    await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save & Connect');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectionScreen), findsNothing); // back on the list
+    expect(find.text('home'), findsOneWidget);
+    expect(stub.connects.single, same((await store.list()).single));
+  });
+
+  testWidgets('Save & Connect from the empty-state editor connects on the list', (tester) async {
+    final store = InMemoryProfileStore();
+    final stub = await pumpList(tester, store);
+    await tester.tap(find.widgetWithText(FilledButton, 'Add connection'));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save & Connect');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectionScreen), findsNothing);
+    expect(stub.connects.single, same((await store.list()).single));
+  });
+
+  testWidgets('Edit, then Save & Connect, connects the edited profile on the list', (tester) async {
+    final store = InMemoryProfileStore();
+    await store.add(_a);
+    final stub = await pumpList(tester, store);
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Edit'));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save & Connect');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectionScreen), findsNothing);
+    final stored = await store.list();
+    expect(stored.single.name, 'home'); // updated in place, not added
+    expect(stored.single.id, 'a');
+    expect(stub.connects.single, same(stored.single));
+  });
+
+  testWidgets('Save still just closes the editor', (tester) async {
+    final store = InMemoryProfileStore();
+    final stub = await pumpList(tester, store);
+    await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectionScreen), findsNothing);
+    expect(find.text('home'), findsOneWidget);
+    expect(await store.list(), hasLength(1));
+    expect(stub.connects, isEmpty);
+  });
+
+  testWidgets('a failed Save & Connect shows its error on the list', (tester) async {
+    final store = InMemoryProfileStore();
+    await pumpListWithSession(
+      tester,
+      store,
+      FakeTransportFactory([const DockerError(DockerErrorKind.network, 'Cannot reach the daemon: refused')]),
+    );
+    await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save & Connect');
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ConnectionScreen), findsNothing);
+    expect(
+      find.descendant(of: find.widgetWithText(Card, 'home'), matching: find.text('Cannot reach the daemon: refused')),
+      findsOneWidget,
+    );
+    expect(find.byType(HomeScreen), findsNothing);
+    expect(await store.list(), hasLength(1));
+  });
+
+  testWidgets('Save & Connect to a reachable daemon opens Home over the list, not over the editor', (tester) async {
+    final d = FakeDaemon();
+    await pumpListWithSession(tester, InMemoryProfileStore(), FakeTransportFactory([d.transport]));
+    await tester.tap(find.widgetWithIcon(FloatingActionButton, Icons.add));
+    await tester.pumpAndSettle();
+    await fillEditorAndTap(tester, 'Save & Connect');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700)); // both route transitions
+
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(find.byType(ConnectionScreen, skipOffstage: false), findsNothing);
+    expect(find.byType(ProfilesScreen, skipOffstage: false), findsOneWidget);
   });
 }

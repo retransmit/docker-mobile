@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../connect/connection_launcher.dart';
 import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
@@ -20,6 +19,7 @@ class _AgentFormState extends ConsumerState<AgentForm> {
   final _port = TextEditingController(text: '8080');
   final _token = TextEditingController();
   bool _useTls = false;
+  bool _saving = false;
 
   @override
   void initState() {
@@ -68,19 +68,36 @@ class _AgentFormState extends ConsumerState<AgentForm> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     final p = _build();
     if (p == null) return;
     final navigator = Navigator.of(context);
-    await _persist(p);
+    if (!await _persistOnce(p)) return;
     navigator.pop();
   }
 
+  /// Saves and returns the profile to the Connections list, which connects
+  /// and shows the progress or the error.
   Future<void> _saveAndConnect() async {
+    if (_saving) return;
     final p = _build();
     if (p == null) return;
-    await _persist(p);
-    if (!mounted) return;
-    await launchConnection(context, ref, p);
+    final navigator = Navigator.of(context);
+    if (!await _persistOnce(p)) return;
+    navigator.pop(p);
+  }
+
+  /// Saves [p]; further taps are ignored from here on (the editor is closing).
+  /// A failed save lets the user try again and rethrows.
+  Future<bool> _persistOnce(ConnectionProfile p) async {
+    _saving = true;
+    try {
+      await _persist(p);
+      return true;
+    } catch (_) {
+      _saving = false;
+      rethrow;
+    }
   }
 
   @override
