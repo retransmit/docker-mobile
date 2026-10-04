@@ -4,6 +4,7 @@ import 'package:xterm/xterm.dart';
 
 import '../state/exec_session_controller.dart';
 import '../state/providers.dart';
+import '../transport/transport.dart';
 
 class ExecScreen extends ConsumerStatefulWidget {
   final String containerId;
@@ -16,14 +17,41 @@ class ExecScreen extends ConsumerStatefulWidget {
 
 class _ExecScreenState extends ConsumerState<ExecScreen> {
   ExecSessionController? _session;
+
+  /// The transport [_session] was started on. When the current transport is
+  /// a different one, the session cannot be restarted in place.
+  Transport? _sessionTransport;
+
   final _cmd = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _newSession();
+  }
+
+  /// Starts a fresh exec on the current connection with the typed command
+  /// (blank = the default shell).
+  void _newSession() {
+    final old = _session;
+    old?.removeListener(_onChange);
+    old?.dispose();
     final client = ref.read(dockerClientProvider);
-    if (client != null) {
-      _session = ExecSessionController(client, widget.containerId)..addListener(_onChange);
+    _sessionTransport = ref.read(transportProvider);
+    _session = client == null
+        ? null
+        : (ExecSessionController(client, widget.containerId, command: _cmd.text)..addListener(_onChange));
+    if (old != null) setState(() {});
+  }
+
+  /// Runs the typed command: in place while the session's connection is
+  /// still the current one, otherwise as a new session.
+  void _run() {
+    final session = _session;
+    if (session == null || !identical(_sessionTransport, ref.read(transportProvider))) {
+      _newSession();
+    } else {
+      session.restart(_cmd.text);
     }
   }
 
@@ -39,6 +67,9 @@ class _ExecScreenState extends ConsumerState<ExecScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<Transport?>(transportProvider, (previous, next) {
+      if (previous != null && !identical(previous, next)) _session?.end();
+    });
     final session = _session;
     return Scaffold(
       appBar: AppBar(title: Text(widget.containerName)),
@@ -46,18 +77,18 @@ class _ExecScreenState extends ConsumerState<ExecScreen> {
           ? const Center(child: Text('Not connected'))
           : Column(
               children: [
-                _CommandBar(controller: _cmd, onRun: () => session.restart(_cmd.text)),
+                _CommandBar(controller: _cmd, onRun: _run),
                 if (session.status == ExecStatus.error)
                   MaterialBanner(
                     content: const Text('Exec failed'),
-                    actions: [TextButton(onPressed: () => session.restart(_cmd.text), child: const Text('Retry'))],
+                    actions: [TextButton(onPressed: _newSession, child: const Text('Retry'))],
                   ),
                 if (session.status == ExecStatus.ended)
                   MaterialBanner(
                     content: Text('Session ended${session.exitCode != null ? ' (exit ${session.exitCode})' : ''}'),
-                    actions: [TextButton(onPressed: () => session.restart(_cmd.text), child: const Text('Restart'))],
+                    actions: [TextButton(onPressed: _newSession, child: const Text('New session'))],
                   ),
-                Expanded(child: TerminalView(session.terminal)),
+                Expanded(child: TerminalView(session.terminal, key: ObjectKey(session))),
               ],
             ),
     );

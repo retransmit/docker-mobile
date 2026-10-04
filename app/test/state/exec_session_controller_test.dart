@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -100,5 +101,73 @@ void main() {
     // and the controller must not have called notifyListeners after dispose
     // (which would throw and fail this test).
     expect(t.execChannels.every((ch) => ch.closed), isTrue);
+  });
+
+  test('end() marks the session ended and closes the channel without inspecting it', () async {
+    final fake = execFake();
+    final c = ExecSessionController(DockerApiClient(fake), 'web');
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.connected);
+    final inspectsBefore = fake.calls.where((x) => x.path.endsWith('/json')).length;
+    await c.end();
+    expect(c.status, ExecStatus.ended);
+    expect(c.exitCode, isNull);
+    expect(fake.lastChannel.closed, isTrue);
+    await pumpEventQueue();
+    expect(fake.calls.where((x) => x.path.endsWith('/json')).length, inspectsBefore);
+    c.dispose();
+  });
+
+  test('a starting command is used for the first exec', () async {
+    final t = execFake();
+    final c = ExecSessionController(DockerApiClient(t), 'cid', command: 'top');
+    await pumpEventQueue();
+
+    final createPosts = t.posts.where((p) => p.path.endsWith('/exec')).toList();
+    expect(createPosts, hasLength(1));
+    expect((createPosts.single.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
+    expect(t.execChannels, hasLength(1));
+    c.dispose();
+  });
+
+  test('end() while connecting stays ended and leaves no open channel', () async {
+    final t = execFake();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    unawaited(c.end()); // the handshake is still in flight
+    await pumpEventQueue();
+
+    expect(c.status, ExecStatus.ended);
+    expect(t.execChannels.where((ch) => !ch.closed), isEmpty);
+    c.dispose();
+  });
+
+  test('restart while connecting leaves exactly one live channel', () async {
+    final t = execFake();
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    unawaited(c.restart('top')); // the first handshake is still in flight
+    await pumpEventQueue();
+
+    expect(t.execChannels.where((ch) => !ch.closed), hasLength(1));
+    expect(c.status, ExecStatus.connected);
+    final createPosts = t.posts.where((p) => p.path.endsWith('/exec')).toList();
+    expect((createPosts.last.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
+    c.dispose();
+  });
+
+  test('ended is reported before the exit code arrives', () async {
+    final t = execFake()..hangOn('GET', RegExp(r'/exec/[^/]+/json$'));
+    final c = ExecSessionController(DockerApiClient(t), 'cid');
+    await pumpEventQueue();
+    expect(c.status, ExecStatus.connected);
+    var notifications = 0;
+    c.addListener(() => notifications++);
+
+    await t.lastChannel.controller.close(); // the process exits; the inspect never answers
+    await pumpEventQueue();
+
+    expect(c.status, ExecStatus.ended);
+    expect(c.exitCode, isNull);
+    expect(notifications, greaterThan(0)); // told about "ended" without waiting for the exit code
+    c.dispose();
   });
 }

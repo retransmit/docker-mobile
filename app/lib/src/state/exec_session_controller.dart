@@ -27,9 +27,13 @@ class ExecSessionController extends ChangeNotifier {
   bool _disposed = false;
   ExecStatus status = ExecStatus.connecting;
   int? exitCode;
-  String command = ''; // empty => default bash/sh chooser
+  String command; // empty => default bash/sh chooser
 
-  ExecSessionController(this.client, this.containerId) {
+  /// Bumped by every start, restart and end; a handshake that finishes under
+  /// an older generation closes its channel and changes nothing.
+  int _generation = 0;
+
+  ExecSessionController(this.client, this.containerId, {this.command = ''}) {
     terminal.onOutput = (data) => _channel?.send(utf8.encode(data));
     terminal.onResize = (w, h, pw, ph) {
       final id = _execId;
@@ -44,17 +48,19 @@ class ExecSessionController extends ChangeNotifier {
       command.trim().isEmpty ? _defaultShell : ['/bin/sh', '-c', command];
 
   Future<void> _start() async {
+    final gen = ++_generation;
     status = ExecStatus.connecting;
     exitCode = null;
     _execId = null;
     notifyListeners();
     try {
       final id = await client.createExec(containerId, cmd: _cmd, tty: true);
+      if (_disposed || gen != _generation) return;
       final ch = await client.attachExec(id, cols: terminal.viewWidth, rows: terminal.viewHeight);
-      // If we were disposed while the handshake was in flight, tear down the
-      // freshly-resolved channel instead of leaking the hijacked agent conn,
-      // and never notify listeners after super.dispose().
-      if (_disposed) {
+      // Disposed, ended or restarted while the handshake was in flight: tear
+      // down the freshly-resolved channel instead of leaking it, and never
+      // notify listeners after super.dispose().
+      if (_disposed || gen != _generation) {
         unawaited(ch.close());
         return;
       }
@@ -68,7 +74,7 @@ class ExecSessionController extends ChangeNotifier {
         onError: (_) => _onEnded(),
       );
     } catch (_) {
-      if (_disposed) return;
+      if (_disposed || gen != _generation) return;
       status = ExecStatus.error;
       notifyListeners();
     }
@@ -76,22 +82,53 @@ class ExecSessionController extends ChangeNotifier {
 
   Future<void> _onEnded() async {
     if (_disposed) return;
+    final gen = _generation;
     status = ExecStatus.ended;
+    notifyListeners(); // show "ended" now; the exit code can lag on a dead connection
     final id = _execId;
-    if (id != null) {
-      try {
-        exitCode = (await client.inspectExec(id)).exitCode;
-      } catch (_) {/* leave exitCode null */}
-    }
-    if (_disposed) return;
+    if (id == null) return;
+    int? code;
+    try {
+      code = (await client.inspectExec(id)).exitCode;
+    } catch (_) {/* leave the exit code unknown */}
+    if (_disposed || gen != _generation) return;
+    exitCode = code;
     notifyListeners();
   }
 
   Future<void> restart(String newCommand) async {
     command = newCommand;
-    await _outputSub?.cancel();
-    await _channel?.close();
+    _generation++; // a handshake still in flight must not land during the teardown
+    final sub = _outputSub;
+    _outputSub = null;
+    final channel = _channel;
+    _channel = null;
+    await sub?.cancel();
+    await channel?.close();
+    if (_disposed) return;
     await _start();
+  }
+
+  /// Ends the session from outside (the connection it ran on is gone): stop
+  /// reading and close the channel. The exit code is unknown.
+  Future<void> end() async {
+    if (_disposed || status == ExecStatus.ended) return;
+    _generation++; // discard a handshake still in flight
+    final sub = _outputSub;
+    _outputSub = null;
+    final channel = _channel;
+    _channel = null;
+    status = ExecStatus.ended;
+    exitCode = null;
+    notifyListeners();
+    // The cancel takes effect at once; not awaiting it lets the close start
+    // in the same turn, as dispose() does.
+    unawaited(sub?.cancel());
+    try {
+      await channel?.close();
+    } catch (_) {
+      // best-effort
+    }
   }
 
   @override
