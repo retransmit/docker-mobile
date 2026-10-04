@@ -90,4 +90,48 @@ void main() {
     expect(((created.single.body as Map)['Cmd'] as List).last, 'top');
     expect(t1.posts.where((c) => c.path.endsWith('/exec')), hasLength(1));
   });
+
+  testWidgets('Run on the current connection restarts in place', (tester) async {
+    final t = freshExecFake();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [transportProvider.overrideWith((ref) => t)],
+      child: const MaterialApp(home: ExecScreen(containerId: 'abc', containerName: 'web')),
+    ));
+    await tester.pump(const Duration(milliseconds: 100));
+    final before = tester.widget<TerminalView>(find.byType(TerminalView));
+    expect(t.posts.where((c) => c.path.endsWith('/exec')), hasLength(1));
+
+    await tester.enterText(find.byType(TextField), 'top');
+    await tester.tap(find.byTooltip('Run'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final created = t.posts.where((c) => c.path.endsWith('/exec')).toList();
+    expect(created, hasLength(2));
+    expect((created.last.body as Map)['Cmd'], ['/bin/sh', '-c', 'top']);
+    expect(t.execChannels.first.closed, isTrue);
+    // Still the same session's view: no new controller was built.
+    final after = tester.widget<TerminalView>(find.byType(TerminalView));
+    expect(after.key, isNotNull);
+    expect(after.key, before.key);
+    expect(after.terminal, same(before.terminal));
+  });
+
+  testWidgets('New session gives the terminal view a new key', (tester) async {
+    final t = freshExecFake();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [transportProvider.overrideWith((ref) => t)],
+      child: const MaterialApp(home: ExecScreen(containerId: 'abc', containerName: 'web')),
+    ));
+    await tester.pump(const Duration(milliseconds: 100));
+    final before = tester.widget<TerminalView>(find.byType(TerminalView)).key;
+
+    await t.lastChannel.controller.close(); // the process exits
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('New session'));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final after = tester.widget<TerminalView>(find.byType(TerminalView)).key;
+    expect(after, isNotNull);
+    expect(after, isNot(before));
+  });
 }

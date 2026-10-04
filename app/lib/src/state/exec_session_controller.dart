@@ -38,7 +38,7 @@ class ExecSessionController extends ChangeNotifier {
     terminal.onResize = (w, h, pw, ph) {
       final id = _execId;
       if (id != null) {
-        client.resizeExec(id, cols: w, rows: h);
+        client.resizeExec(id, cols: w, rows: h).ignore();
       }
     };
     _start();
@@ -86,6 +86,7 @@ class ExecSessionController extends ChangeNotifier {
     status = ExecStatus.ended;
     notifyListeners(); // show "ended" now; the exit code can lag on a dead connection
     final id = _execId;
+    _execId = null;
     if (id == null) return;
     int? code;
     try {
@@ -97,16 +98,26 @@ class ExecSessionController extends ChangeNotifier {
   }
 
   Future<void> restart(String newCommand) async {
+    if (_disposed) return;
     command = newCommand;
     _generation++; // a handshake still in flight must not land during the teardown
     final sub = _outputSub;
     _outputSub = null;
     final channel = _channel;
     _channel = null;
-    await sub?.cancel();
-    await channel?.close();
-    if (_disposed) return;
+    // Neither the cancel nor the close is waited on: both take effect at
+    // once, and a close on a dead connection must not hold up the new session.
+    unawaited(sub?.cancel());
+    unawaited(_closeQuietly(channel));
     await _start();
+  }
+
+  static Future<void> _closeQuietly(ExecChannel? channel) async {
+    try {
+      await channel?.close();
+    } catch (_) {
+      // best-effort teardown
+    }
   }
 
   /// Ends the session from outside (the connection it ran on is gone): stop
@@ -118,17 +129,14 @@ class ExecSessionController extends ChangeNotifier {
     _outputSub = null;
     final channel = _channel;
     _channel = null;
+    _execId = null;
     status = ExecStatus.ended;
     exitCode = null;
     notifyListeners();
     // The cancel takes effect at once; not awaiting it lets the close start
     // in the same turn, as dispose() does.
     unawaited(sub?.cancel());
-    try {
-      await channel?.close();
-    } catch (_) {
-      // best-effort
-    }
+    await _closeQuietly(channel);
   }
 
   @override
