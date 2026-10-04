@@ -3,13 +3,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_api_client.dart';
 import 'package:docker_mobile/src/api/models/docker_container.dart';
 import 'package:docker_mobile/src/state/providers.dart';
+import 'package:docker_mobile/src/storage/credential_store.dart';
+import 'package:docker_mobile/src/storage/profile_store.dart';
+import 'package:docker_mobile/src/transport/timeouts.dart';
 import 'package:docker_mobile/src/ui/containers_screen.dart';
 import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 import 'package:docker_mobile/src/ui/widgets/resource_widgets.dart';
 import 'package:docker_mobile/src/ui/widgets/skeletons.dart';
+
+import '../support/fake_session.dart';
 
 void main() {
   testWidgets('renders container names from the provider', (tester) async {
@@ -169,5 +175,46 @@ void main() {
     expect(calls, 2);
     expect(tester.takeException(), isNull);
     expect(find.byType(ErrorView), findsOneWidget);
+  });
+
+  testWidgets('a reconnect keeps the list on screen', (tester) async {
+    final d1 = FakeDaemon(), d2 = FakeDaemon();
+    d1.transport.onGet(
+      RegExp(r'/containers/json$'),
+      (_) => http.Response('[{"Id":"a","Names":["/web"],"Image":"nginx","State":"running","Status":"Up"}]', 200),
+    );
+    d2.transport.hangOn('GET', RegExp(r'/containers/json$'));
+    late ProviderContainer container;
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        transportFactoryProvider.overrideWithValue(FakeTransportFactory([d1.transport, d2.transport])),
+        reconnectPolicyProvider.overrideWithValue(immediatePolicy()),
+        lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
+        profileStoreProvider.overrideWithValue(InMemoryProfileStore()),
+      ],
+      child: MaterialApp(
+        home: Builder(builder: (ctx) {
+          container = ProviderScope.containerOf(ctx);
+          return const ContainersScreen();
+        }),
+      ),
+    ));
+    await container.read(sessionProvider.notifier).connect(const ConnectionProfile(
+        id: '1', name: 'A', kind: ConnectionKind.agent, agent: AgentCredentials(baseUri: 'http://h:1', token: 't')));
+    await tester.pumpAndSettle();
+    expect(find.text('/web'), findsOneWidget);
+
+    // The events stream breaks and the session reconnects through the second daemon.
+    d1.events.addError(const DockerError(DockerErrorKind.network, 'reset'));
+    await tester.pump(const Duration(milliseconds: 50));
+    // Long enough for a switch to the skeleton to finish, had one started.
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(container.read(transportProvider), same(d2.transport));
+    expect(d2.transport.calls.where((c) => c.path.endsWith('/containers/json')), hasLength(1)); // refetch in flight
+    expect(find.byType(SkeletonList), findsNothing);
+    expect(find.text('/web'), findsOneWidget);
+
+    // The refetch never answers: let it time out so that no timer outlives the test.
+    await tester.pump(kRequestTimeout);
   });
 }

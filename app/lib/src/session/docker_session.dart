@@ -43,6 +43,8 @@ class DockerSession extends StateNotifier<SessionState> {
         _policy = policy,
         // ignore: prefer_initializing_formals
         _lifecycle = lifecycle,
+        // ignore: prefer_initializing_formals
+        _invalidator = invalidator,
         _profiles = profileStore,
         _clientFactory = clientFactory ?? _defaultClient,
         // ignore: prefer_initializing_formals
@@ -69,6 +71,7 @@ class DockerSession extends StateNotifier<SessionState> {
   final TransportFactory _factory;
   final ReconnectPolicy _policy;
   final LifecycleSource _lifecycle;
+  final Invalidator _invalidator;
   final ProfileStore _profiles;
   final ClientFactory _clientFactory;
   final void Function()? _onNewSession;
@@ -248,6 +251,8 @@ class DockerSession extends StateNotifier<SessionState> {
         clearError: true,
       );
       unawaited(_closeQuietly(old));
+      // What is on screen was fetched over the old transport: refresh it in place.
+      _invalidator.all();
       if (state.foreground) _hub.resume();
     } on HostKeyMismatchException {
       if (!_current(gen)) return;

@@ -22,6 +22,9 @@ abstract class Invalidator {
   void list(EventCategory category);
   void detail(EventCategory category, String id);
   void dashboard();
+
+  /// The connection came back on a new transport: refresh everything shown.
+  void all();
 }
 
 /// Owns the session's single events subscription. Forwards every event,

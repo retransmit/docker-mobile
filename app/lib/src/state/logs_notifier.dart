@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/docker_api_client.dart';
-import '../api/models/container_inspect.dart';
 import '../api/models/log_line.dart';
 import '../api/stdcopy.dart';
 import '../api/timestamps.dart';
@@ -223,13 +222,6 @@ class LogsNotifier extends StateNotifier<LogsState> {
     super.dispose();
   }
 }
-
-final containerInspectProvider =
-    FutureProvider.family<ContainerInspect, String>((ref, id) {
-  final client = ref.watch(dockerClientProvider);
-  if (client == null) throw StateError('Not connected');
-  return client.inspectContainer(id);
-});
 
 final logsProvider =
     StateNotifierProvider.autoDispose.family<LogsNotifier, LogsState, ({String id, bool tty})>(

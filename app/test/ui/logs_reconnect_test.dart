@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/api/timestamps.dart';
-import 'package:docker_mobile/src/state/logs_notifier.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';

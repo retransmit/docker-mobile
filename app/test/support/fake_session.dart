@@ -112,7 +112,7 @@ String eventLine({String type = 'container', String action = 'start', String id 
       'timeNano': ?timeNano,
     })}\n';
 
-/// Records invalidations as strings: `list:<category>`, `detail:<category>:<id>`, `dashboard`.
+/// Records invalidations as strings: `list:<category>`, `detail:<category>:<id>`, `dashboard`, `all`.
 class RecordingInvalidator implements Invalidator {
   final calls = <String>[];
 
@@ -124,4 +124,7 @@ class RecordingInvalidator implements Invalidator {
 
   @override
   void dashboard() => calls.add('dashboard');
+
+  @override
+  void all() => calls.add('all');
 }

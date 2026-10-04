@@ -62,4 +62,35 @@ void main() {
     await pumpEventQueue();
     expect(runs, 2);
   });
+
+  test('`all` refreshes each resource provider and creates none', () async {
+    var lists = 0;
+    final details = <String>[];
+    final c = ProviderContainer(overrides: [
+      containersProvider.overrideWith((ref) async {
+        lists++;
+        return const <DockerContainer>[];
+      }),
+      containerDetailProvider.overrideWith((ref, id) async {
+        details.add(id);
+        throw UnimplementedError();
+      }),
+    ]);
+    addTearDown(c.dispose);
+    await c.read(containersProvider.future);
+    c.read(containerDetailProvider('a'));
+    await pumpEventQueue();
+    expect(lists, 1);
+    expect(details, ['a']);
+
+    c.read(_invalidatorProvider).all();
+    await c.read(containersProvider.future);
+    c.read(containerDetailProvider('a'));
+    await pumpEventQueue();
+    expect(lists, 2);
+    expect(details, ['a', 'a']);
+    // Nothing is created for a provider or a family member that was never read.
+    expect(c.exists(imagesProvider), isFalse);
+    expect(c.exists(containerDetailProvider('b')), isFalse);
+  });
 }

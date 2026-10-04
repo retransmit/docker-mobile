@@ -392,6 +392,37 @@ void main() {
         expect(d1.transport.closed, isTrue);
       });
     });
+
+    test('a successful reconnect asks for a full refresh once; a first connect does not', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final d2 = FakeDaemon();
+        final h = _Harness([d1.transport, d2.transport]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.invalidator.calls, isNot(contains('all')));
+        d1.events.addError(const SocketException('reset'));
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(d2.transport));
+        expect(h.invalidator.calls.where((c) => c == 'all'), hasLength(1));
+      });
+    });
+
+    test('a failed reconnect attempt asks for no refresh', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final h = _Harness([d1.transport, _down]);
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.factory.builds, 2);
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 2);
+        expect(h.invalidator.calls, isNot(contains('all')));
+      });
+    });
   });
 
   group('lifecycle', () {

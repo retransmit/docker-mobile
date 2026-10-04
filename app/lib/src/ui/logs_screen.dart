@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import '../api/models/log_line.dart';
 import '../api/stdcopy.dart';
 import '../state/logs_notifier.dart';
+import '../state/providers.dart';
 
 class LogsScreen extends ConsumerWidget {
   final String containerId;
