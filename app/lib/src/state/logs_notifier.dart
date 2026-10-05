@@ -254,7 +254,8 @@ class LogsNotifier extends StateNotifier<LogsState> {
   void setSearch(String value) => state = state.copyWith(search: value);
 
   /// Reopens now, continuing from the last line received. Ignored while the
-  /// session is away: the stream restarts by itself when it returns.
+  /// session is away: the stream restarts by itself when it returns, if the
+  /// user follows.
   void retry() {
     if (_live) _supervisor.retry();
   }

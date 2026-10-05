@@ -438,6 +438,57 @@ void main() {
     n.dispose();
   });
 
+  test('a tail change while following and away comes with the stream that reopens, and a later pause fetches nothing',
+      () async {
+    final t = FakeTransport()..onStream('/containers/a/logs', (_) => StreamController<List<int>>().stream);
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+
+    n.setLive(false);
+    n.setTail(100);
+    n.setLive(true); // the follow reopens with the new tail: no one-off fetch is owed any more
+    await pumpEventQueue();
+    expect(opens(), hasLength(2));
+    expect(opens().last.query!['tail'], '100');
+    expect(opens().last.query!['follow'], 'true');
+
+    n.setFollowing(false);
+    await pumpEventQueue();
+    expect(opens(), hasLength(2));
+    expect(n.state.status, LogsStatus.paused);
+    n.dispose();
+  });
+
+  test('a tail change made up when the session returned is not fetched again on the next return', () async {
+    final t = FakeTransport()
+      ..onStream('/containers/a/logs', (call) {
+        // Like the daemon: a follow stays open, a one-off fetch ends.
+        if (call.query!['follow'] == 'true') return StreamController<List<int>>().stream;
+        return Stream.value(frame(1, utf8.encode('${ts(1)} one\n')));
+      });
+    final n = LogsNotifier(() => DockerApiClient(t), 'a', false);
+    await pumpEventQueue();
+    List<RecordedCall> opens() => t.calls.where((c) => c.method == 'STREAM').toList();
+
+    n.setFollowing(false);
+    n.setLive(false);
+    n.setTail(100);
+    n.setLive(true); // the one-off fetch that was owed
+    await pumpEventQueue();
+    expect(opens(), hasLength(2));
+    expect(opens().last.query!['follow'], 'false');
+    expect(n.state.status, LogsStatus.idle); // it ran to its end
+    expect(n.state.lines.single.text, 'one');
+
+    n.setLive(false);
+    n.setLive(true); // nothing is owed any more
+    await pumpEventQueue();
+    expect(opens(), hasLength(2));
+    expect(n.state.lines.single.text, 'one');
+    n.dispose();
+  });
+
   test('a one-off fetch cut short by the session is made up from the cursor', () async {
     final controllers = <StreamController<List<int>>>[];
     final t = FakeTransport()
