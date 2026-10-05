@@ -23,7 +23,8 @@ abstract class Invalidator {
   void detail(EventCategory category, String id);
   void dashboard();
 
-  /// The connection came back on a new transport: refresh everything shown.
+  /// The connection came back on a new transport, or the app returned to the
+  /// foreground: refresh everything shown.
   void all();
 }
 
@@ -67,7 +68,7 @@ class EventsHub {
     _listen();
   }
 
-  /// Reopens after [pause] or a lost stream, from the cursor.
+  /// Reopens after [pause], [stop] or a lost stream, from the cursor.
   void resume() {
     _cancelSubscription();
     _listen();
@@ -76,7 +77,7 @@ class EventsHub {
   /// Stops reading without reporting a loss; keeps the cursor and timers.
   void pause() => _cancelSubscription();
 
-  /// Stops reading and drops pending refreshes.
+  /// Stops reading and drops pending refreshes; keeps the cursor.
   void stop() {
     _cancelSubscription();
     for (final t in _timers.values) {

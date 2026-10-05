@@ -283,9 +283,10 @@ class DockerSession extends StateNotifier<SessionState> {
       // Adopted: the catch below must not close it.
       built = null;
       unawaited(_closeQuietly(old));
+      // The events stream first: a refresh that throws must not leave the session without it.
+      if (state.foreground) _hub.resume();
       // What is on screen was fetched over the old transport: refresh it in place.
       _invalidator.all();
-      if (state.foreground) _hub.resume();
     } on HostKeyMismatchException {
       if (!_current(gen)) return;
       state = state.copyWith(
@@ -316,7 +317,9 @@ class DockerSession extends StateNotifier<SessionState> {
     if (s == AppLifecycleState.paused) {
       if (!state.foreground) return;
       state = state.copyWith(foreground: false);
-      _hub.pause();
+      // Pending refreshes too: they would fire in the background, possibly on a
+      // connection that died there, and the return refreshes everything.
+      _hub.stop();
       _retryTimer?.cancel();
       _retryTimer = null;
     } else if (s == AppLifecycleState.resumed) {
@@ -341,10 +344,14 @@ class DockerSession extends StateNotifier<SessionState> {
     if (client == null) return;
     try {
       await client.ping();
-      if (!_current(gen) || state.status != SessionStatus.connected || !state.foreground) return;
+      // An answer about a client that has been replaced says nothing about the connection in use.
+      if (!_current(gen) || !identical(client, _client)) return;
+      if (state.status != SessionStatus.connected || !state.foreground) return;
       _hub.resume();
+      // The daemon keeps only a bounded backlog of events: what happened meanwhile may be gone from it.
+      _invalidator.all();
     } catch (e) {
-      if (!_current(gen)) return;
+      if (!_current(gen) || !identical(client, _client)) return;
       livenessLost(DockerError.wrap(e));
     }
   }

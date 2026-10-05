@@ -49,6 +49,39 @@ class _HeldPing extends FakeTransport {
   }
 }
 
+/// A daemon whose `/_ping` answers the probe at once. Every later ping waits
+/// in [pings] until the test completes it, or fails it with an error.
+class _PingsOnHold extends FakeTransport {
+  _PingsOnHold() {
+    onGet('/_ping', (_) => http.Response('OK', 200));
+    onGet('/version', (_) => http.Response(jsonEncode({'Version': '27.0', 'ApiVersion': '1.46'}), 200));
+    onStream(RegExp(r'/events$'), (_) {
+      final events = StreamController<List<int>>();
+      eventStreams.add(events);
+      return events.stream;
+    });
+  }
+
+  final pings = <Completer<void>>[];
+
+  /// Every events stream opened, oldest first.
+  final eventStreams = <StreamController<List<int>>>[];
+  bool _probed = false;
+
+  @override
+  Future<http.Response> get(String path, {Map<String, String>? query}) async {
+    if (path == '/_ping') {
+      if (_probed) {
+        final held = Completer<void>();
+        pings.add(held);
+        await held.future;
+      }
+      _probed = true;
+    }
+    return super.get(path, query: query);
+  }
+}
+
 /// A daemon that answers the probe but ends its events stream as soon as it
 /// is opened, like a proxy that lets ping and version through and cannot stream.
 FakeDaemon _noEventsDaemon() =>
@@ -660,6 +693,24 @@ void main() {
       });
     });
 
+    test('a refresh that throws after a reconnect still leaves the events stream open on the new transport', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon();
+        final d2 = FakeDaemon();
+        final h = _Harness([d1.transport, d2.transport, FakeDaemon().transport], invalidator: _ThrowingInvalidator());
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.status, SessionStatus.connected);
+        expect(d2.eventOpens, hasLength(1));
+        expect(d2.activeEventStreams, 1);
+
+        // So the next loss is noticed too.
+        d2.events.addError(const SocketException('reset'));
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+      });
+    });
+
     test('an events stream that never stays up ends in failed after the attempt limit', () {
       fakeAsync((async) {
         // More daemons than the limit allows: without it the session would go through them all.
@@ -854,6 +905,147 @@ void main() {
         async.flushMicrotasks();
         expect(h.s.foreground, isTrue);
         expect(d.activeEventStreams, 1);
+      });
+    });
+
+    test('returning to the foreground with a good ping refreshes everything once and resumes from the cursor', () {
+      fakeAsync((async) {
+        final d = FakeDaemon();
+        final h = _Harness([d.transport]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        d.events.add(utf8.encode(eventLine(timeNano: 1700000000000000123)));
+        async.elapse(const Duration(seconds: 3)); // the refreshes of that event are done
+        h.invalidator.calls.clear();
+
+        h.lifecycle.emit(AppLifecycleState.paused);
+        async.elapse(const Duration(hours: 1)); // longer than the daemon keeps its backlog of events
+        expect(h.invalidator.calls, isEmpty);
+
+        h.lifecycle.emit(AppLifecycleState.resumed);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.invalidator.calls, ['all']);
+        expect(d.eventOpens, hasLength(2));
+        expect(d.eventOpens.last.query, {'since': '1700000000.000000123'});
+        expect(d.activeEventStreams, 1);
+        async.elapse(const Duration(minutes: 1));
+        expect(h.invalidator.calls, ['all']);
+      });
+    });
+
+    test('a refresh pending when the app goes to the background never fires there', () {
+      fakeAsync((async) {
+        final d = FakeDaemon();
+        final h = _Harness([d.transport]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        d.events.add(utf8.encode(eventLine(action: 'die', timeNano: 1700000000000000123)));
+        async.flushMicrotasks();
+        expect(h.events, hasLength(1)); // seen: its refreshes wait for the debounce (0.5 s and 2 s)
+
+        h.lifecycle.emit(AppLifecycleState.paused);
+        async.elapse(const Duration(minutes: 5));
+        expect(h.invalidator.calls, isEmpty);
+
+        // The return makes up for them, and the event that was seen is not asked for again.
+        h.lifecycle.emit(AppLifecycleState.resumed);
+        async.flushMicrotasks();
+        expect(h.invalidator.calls, ['all']);
+        expect(d.eventOpens.last.query, {'since': '1700000000.000000123'});
+        async.elapse(const Duration(minutes: 1));
+        expect(h.invalidator.calls, ['all']);
+      });
+    });
+
+    final latePings = <String, void Function(Completer<void>)>{
+      'fails': (ping) => ping.completeError(const SocketException('reset')),
+      'answers': (ping) => ping.complete(),
+    };
+    for (final MapEntry(key: outcome, value: finish) in latePings.entries) {
+      test('a resume ping that $outcome only after a reconnect leaves the new connection alone', () {
+        fakeAsync((async) {
+          final t1 = _PingsOnHold();
+          final d2 = FakeDaemon();
+          final h = _Harness([t1, d2.transport]);
+          h.session.connect(agentA);
+          async.flushMicrotasks();
+          expect(h.s.status, SessionStatus.connected);
+
+          // In the foreground again twice in a row: two pings are out on the old connection.
+          h.lifecycle
+            ..emit(AppLifecycleState.paused)
+            ..emit(AppLifecycleState.resumed)
+            ..emit(AppLifecycleState.paused)
+            ..emit(AppLifecycleState.resumed);
+          async.flushMicrotasks();
+          expect(t1.pings, hasLength(2));
+
+          // The second one fails and the session reconnects.
+          t1.pings[1].completeError(const SocketException('reset'));
+          async.flushMicrotasks();
+          expect(h.s.status, SessionStatus.reconnecting);
+          async.elapse(const Duration(seconds: 1));
+          expect(h.s.status, SessionStatus.connected);
+          expect(h.s.transport, same(d2.transport));
+          expect(d2.eventOpens, hasLength(1));
+          expect(h.invalidator.calls, ['all']);
+
+          // The first one finishes only now. It was asked of the old connection and says nothing about this one.
+          finish(t1.pings[0]);
+          async.flushMicrotasks();
+          expect(h.s.status, SessionStatus.connected);
+          expect(h.s.transport, same(d2.transport));
+          expect(d2.eventOpens, hasLength(1));
+          expect(d2.activeEventStreams, 1);
+          expect(h.invalidator.calls, ['all']);
+          expect(h.factory.builds, 2);
+        });
+      });
+    }
+
+    test('a resume ping that answers after the app went to the background again opens and refreshes nothing', () {
+      fakeAsync((async) {
+        final t = _PingsOnHold();
+        final h = _Harness([t]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        h.lifecycle
+          ..emit(AppLifecycleState.paused)
+          ..emit(AppLifecycleState.resumed)
+          ..emit(AppLifecycleState.paused);
+        async.flushMicrotasks();
+
+        t.pings.single.complete();
+        async.flushMicrotasks();
+        expect(t.eventStreams, hasLength(1)); // the one the connect opened, cancelled since
+        expect(t.eventStreams.single.hasListener, isFalse);
+        expect(h.invalidator.calls, isEmpty);
+      });
+    });
+
+    test('a resume ping that answers while the session is reconnecting opens and refreshes nothing', () {
+      fakeAsync((async) {
+        final t = _PingsOnHold();
+        final h = _Harness([t, FakeDaemon().transport]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        h.lifecycle
+          ..emit(AppLifecycleState.paused)
+          ..emit(AppLifecycleState.resumed)
+          ..emit(AppLifecycleState.paused)
+          ..emit(AppLifecycleState.resumed);
+        async.flushMicrotasks();
+        t.pings[1].completeError(const SocketException('reset'));
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+
+        // The connection is taken for dead: a late answer on it must not be acted on.
+        t.pings[0].complete();
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(t.eventStreams, hasLength(1));
+        expect(h.invalidator.calls, isEmpty);
       });
     });
   });
