@@ -111,6 +111,23 @@ void main() {
     });
   });
 
+  test('a stream that gets no headers reports a daemon timeout, in the words of the other transports', () {
+    fakeAsync((async) {
+      final conn = Duplex(input: StreamController<List<int>>().stream, add: (_) {}, close: () async {});
+      final t = SshTransport(openDuplex: () async => conn, headerTimeout: const Duration(seconds: 5));
+      Object? err;
+      t.stream('/x').listen((_) {}, onError: (Object e) => err = e);
+      async.elapse(const Duration(seconds: 6));
+      // The SSH connection is up and the request went out: it is the daemon that did not answer.
+      expect(
+        err,
+        isA<DockerError>()
+            .having((e) => e.kind, 'kind', DockerErrorKind.timeout)
+            .having((e) => e.message, 'message', 'Timed out waiting for the daemon'),
+      );
+    });
+  });
+
   test('stream times out when the channel never opens', () {
     fakeAsync((async) {
       final t = SshTransport(openDuplex: () => Completer<Duplex>().future, headerTimeout: const Duration(seconds: 5));

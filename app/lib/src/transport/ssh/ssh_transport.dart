@@ -111,7 +111,9 @@ class SshTransport implements Transport {
 
     return attempt().timeout(budget, onTimeout: () {
       timedOut = true;
-      throw TimeoutException('No response from the daemon within $budget', budget);
+      // Already the daemon timeout every transport reports: left as a bare
+      // TimeoutException, mapSshError would call it a timed-out SSH connection.
+      throw DockerError.fromException(TimeoutException('No response from the daemon within $budget', budget));
     });
   }
 
