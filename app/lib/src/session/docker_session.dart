@@ -176,7 +176,8 @@ class DockerSession extends StateNotifier<SessionState> {
   /// The events stream died (error or clean end): start reconnecting. A
   /// reconnect counts as recovered only once the stream has stayed up for
   /// the policy cap; a loss before that continues the attempt count, and
-  /// fails the session when the limit is used up.
+  /// fails the session when the limit is used up. A return to the
+  /// foreground starts the count again.
   void livenessLost(DockerError error) {
     if (!mounted || state.status != SessionStatus.connected) return;
     // Drop pending refreshes too: they would hit the dead connection, and a reconnect refreshes everything.
@@ -325,6 +326,11 @@ class DockerSession extends StateNotifier<SessionState> {
     } else if (s == AppLifecycleState.resumed) {
       if (state.foreground) return;
       state = state.copyWith(foreground: true);
+      // What was closed on purpose in the background does not count against
+      // the attempt limit: a loss found now is a new one.
+      _settleTimer?.cancel();
+      _settleTimer = null;
+      _unsettled = 0;
       switch (state.status) {
         case SessionStatus.connected:
           unawaited(_checkAfterResume());

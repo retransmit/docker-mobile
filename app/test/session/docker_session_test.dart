@@ -1048,6 +1048,50 @@ void main() {
         expect(h.invalidator.calls, isEmpty);
       });
     });
+
+    test('a loss found on return to the foreground starts at attempt 1, however soon after a reconnect', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon(), d2 = FakeDaemon();
+        final h = _Harness([d1.transport, d2.transport, FakeDaemon().transport]);
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.transport, same(d2.transport)); // reconnected this instant: far from settled
+
+        // The app goes away at once, and the connection dies while it is away.
+        h.lifecycle.emit(AppLifecycleState.paused);
+        d2.transport.throwOn('GET', '/_ping', const SocketException('reset'));
+        h.lifecycle.emit(AppLifecycleState.resumed);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 1);
+      });
+    });
+
+    test('five short visits that each find the connection dead never end in failed', () {
+      fakeAsync((async) {
+        final daemons = [for (var i = 0; i < 7; i++) FakeDaemon()];
+        final h = _Harness([for (final d in daemons) d.transport]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+
+        // Come back, find the connection dead, look for 20 s (less than the
+        // 30 s cap) and lock the phone: five times, and then come back once
+        // more. No time passes in the background.
+        final found = <String>[];
+        for (var visit = 1; visit <= 6; visit++) {
+          h.lifecycle.emit(AppLifecycleState.paused);
+          daemons[visit - 1].transport.throwOn('GET', '/_ping', const SocketException('reset'));
+          h.lifecycle.emit(AppLifecycleState.resumed);
+          async.flushMicrotasks();
+          found.add('${h.s.status.name} ${h.s.attempt}');
+          async.elapse(const Duration(seconds: 20));
+        }
+        expect(found, List.filled(6, 'reconnecting 1'));
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(daemons[6].transport));
+        expect(h.factory.builds, 7); // the connect and one reconnect for every return
+      });
+    });
   });
 
   group('events', () {
