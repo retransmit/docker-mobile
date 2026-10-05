@@ -11,6 +11,10 @@ import '../ui/home_screen.dart';
 /// session is doing by then. The only place the SSH host-key TOFU dialog
 /// lives. A failed connect stays in the session state, which the
 /// Connections screen shows inline.
+///
+/// The session lasts as long as Home does: once Home is closed, by the back
+/// button or by a Disconnect action, the session is disconnected, and only
+/// then does the returned future complete.
 Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionProfile profile,
     {String? pinOverride}) async {
   final navigator = Navigator.of(context);
@@ -38,6 +42,8 @@ Future<void> launchConnection(BuildContext context, WidgetRef ref, ConnectionPro
     return;
   }
   if (connected && context.mounted) {
-    navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
+    await navigator.push(MaterialPageRoute(builder: (_) => const HomeScreen()));
+    // Home is gone, however it was left: nothing can show this session any more.
+    await session.disconnect();
   }
 }

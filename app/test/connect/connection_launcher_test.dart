@@ -1,23 +1,50 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/connect/connection_launcher.dart';
+import 'package:docker_mobile/src/session/session_state.dart';
 import 'package:docker_mobile/src/session/transport_factory.dart';
 import 'package:docker_mobile/src/state/providers.dart';
 import 'package:docker_mobile/src/storage/credential_store.dart';
 import 'package:docker_mobile/src/storage/profile_store.dart';
 import 'package:docker_mobile/src/ui/home_screen.dart';
+import 'package:docker_mobile/src/ui/widgets/session_banner.dart';
 
 import '../support/fake_session.dart';
+import '../support/fake_transport.dart';
 
 const agent = ConnectionProfile(id: '1', name: 'A', kind: ConnectionKind.agent,
     agent: AgentCredentials(baseUri: 'http://127.0.0.1:8080', token: 't'));
 ConnectionProfile ssh({String? pin}) => ConnectionProfile(id: '9', name: 'S', kind: ConnectionKind.ssh,
     ssh: SshCredentials(host: '127.0.0.1', port: 22, username: 'u', authMethod: SshAuthMethod.password, password: 'p', pinnedHostKey: pin));
 
+/// A daemon's transport that counts how often it is closed. Its events
+/// stream stays open until the test breaks it through [events].
+class _CountingTransport extends FakeTransport {
+  _CountingTransport() {
+    onGet('/_ping', (_) => http.Response('OK', 200));
+    onGet('/version', (_) => http.Response('{"Version":"27.0","ApiVersion":"1.46"}', 200));
+    onStream(RegExp(r'/events$'), (_) => events.stream);
+  }
+
+  final events = StreamController<List<int>>();
+  int closes = 0;
+
+  @override
+  Future<void> close() {
+    closes++;
+    return super.close();
+  }
+}
+
+/// Taps a button that launches a connection to [p]. With [bannerOver], the
+/// session banner sits above that navigator, as it does in the app.
 Future<ProviderContainer> pumpLauncher(WidgetTester tester, ConnectionProfile p, FakeTransportFactory factory,
-    {ProfileStore? store}) async {
+    {ProfileStore? store, GlobalKey<NavigatorState>? bannerOver}) async {
   late ProviderContainer container;
   await tester.pumpWidget(ProviderScope(
     overrides: [
@@ -26,6 +53,10 @@ Future<ProviderContainer> pumpLauncher(WidgetTester tester, ConnectionProfile p,
       lifecycleSourceProvider.overrideWithValue(ManualLifecycleSource()),
     ],
     child: MaterialApp(
+      navigatorKey: bannerOver,
+      builder: bannerOver == null
+          ? null
+          : (context, child) => SessionBannerHost(navigatorKey: bannerOver, child: child!),
       home: Consumer(builder: (context, ref, _) {
         container = ProviderScope.containerOf(context);
         return Scaffold(body: ElevatedButton(onPressed: () => launchConnection(context, ref, p), child: const Text('go')));
@@ -97,5 +128,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(factory.builds, 1);
     expect((await store.list()).single.ssh!.pinnedHostKey, 'FP-OLD');
+  });
+
+  /// The session is over and its one transport was closed, exactly once.
+  void expectEnded(ProviderContainer c, _CountingTransport t, FakeTransportFactory factory) {
+    expect(find.byType(HomeScreen), findsNothing);
+    expect(find.text('go'), findsOneWidget);
+    final session = c.read(sessionProvider);
+    expect(session.status, SessionStatus.disconnected);
+    expect(session.error, isNull);
+    expect(session.transport, isNull);
+    expect(t.closes, 1);
+    expect(t.events.hasListener, isFalse);
+    expect(factory.builds, 1);
+  }
+
+  testWidgets('leaving Home ends the session', (tester) async {
+    final t = _CountingTransport();
+    final factory = FakeTransportFactory([t]);
+    final c = await pumpLauncher(tester, agent, factory);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(HomeScreen), findsOneWidget);
+    expect(c.read(sessionProvider).status, SessionStatus.connected);
+
+    await tester.pageBack(); // the arrow in the tab's app bar
+    await tester.pumpAndSettle();
+    expectEnded(c, t, factory);
+  });
+
+  testWidgets('the Disconnect action on Home still ends the session once, without an error', (tester) async {
+    final t = _CountingTransport();
+    final factory = FakeTransportFactory([t]);
+    final c = await pumpLauncher(tester, agent, factory);
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.tap(find.byIcon(Icons.monitor_heart)); // the System tab
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.logout));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Disconnect'));
+    await tester.pumpAndSettle();
+    expectEnded(c, t, factory);
+  });
+
+  testWidgets('Disconnect in the banner over Home still ends the session once, without an error', (tester) async {
+    final t = _CountingTransport();
+    final factory = FakeTransportFactory([t]);
+    final c = await pumpLauncher(tester, agent, factory, bannerOver: GlobalKey<NavigatorState>());
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byType(HomeScreen), findsOneWidget);
+
+    t.events.addError(const DockerError(DockerErrorKind.network, 'reset'));
+    await tester.pump(); // the session notices
+    await tester.pump(); // and the banner is drawn
+    expect(c.read(sessionProvider).status, SessionStatus.reconnecting);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Disconnect'));
+    await tester.pump(); // the banner and its spinner go
+    await tester.pumpAndSettle();
+    expectEnded(c, t, factory);
   });
 }
