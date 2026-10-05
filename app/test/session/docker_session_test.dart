@@ -49,6 +49,11 @@ class _HeldPing extends FakeTransport {
   }
 }
 
+/// A daemon that answers the probe but ends its events stream as soon as it
+/// is opened, like a proxy that lets ping and version through and cannot stream.
+FakeDaemon _noEventsDaemon() =>
+    FakeDaemon()..transport.onStream(RegExp(r'/events$'), (_) => const Stream<List<int>>.empty());
+
 /// A profile store whose `update` finishes only once [written] is completed.
 class _HeldUpdateStore extends InMemoryProfileStore {
   final written = Completer<void>();
@@ -652,6 +657,119 @@ void main() {
         expect(h.s.status, SessionStatus.connected);
         expect(h.s.transport, same(d2.transport));
         expect(d2.transport.closed, isFalse);
+      });
+    });
+
+    test('an events stream that never stays up ends in failed after the attempt limit', () {
+      fakeAsync((async) {
+        // More daemons than the limit allows: without it the session would go through them all.
+        final h = _Harness([for (var i = 0; i < 10; i++) _noEventsDaemon().transport]);
+        final attempts = <int>[];
+        h.session.addListener((s) {
+          if (s.status == SessionStatus.reconnecting) attempts.add(s.attempt);
+        }, fireImmediately: false);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting); // connected, and the stream ended at once
+
+        async.elapse(const Duration(seconds: 1 + 2 + 4 + 8)); // four reconnects, each lost again at once
+        expect(attempts, [1, 2, 3, 4, 5]);
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.factory.builds, 5);
+
+        async.elapse(const Duration(seconds: 16)); // the fifth holds no better
+        expect(h.s.status, SessionStatus.failed);
+        expect(h.s.error!.message, 'The daemon closed the event stream');
+        expect(attempts, [1, 2, 3, 4, 5]);
+        expect(h.factory.builds, 6);
+
+        async.elapse(const Duration(minutes: 5));
+        expect(h.s.status, SessionStatus.failed);
+        expect(h.factory.builds, 6);
+      });
+    });
+
+    test('a reconnect that holds for the policy cap starts the count again', () {
+      fakeAsync((async) {
+        final daemons = [for (var i = 0; i < 5; i++) FakeDaemon()];
+        final h = _Harness([for (final d in daemons) d.transport]);
+        void lose(FakeDaemon d) {
+          d.events.addError(const SocketException('reset'));
+          async.flushMicrotasks();
+        }
+
+        connectThenLose(async, h, daemons[0]);
+        expect(h.s.attempt, 1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.transport, same(daemons[1].transport));
+
+        // Lost at once: the count goes on.
+        lose(daemons[1]);
+        expect(h.s.attempt, 2);
+        async.elapse(const Duration(seconds: 2));
+        expect(h.s.transport, same(daemons[2].transport));
+
+        // Lost just short of the cap (30 s), which runs from this reconnect and
+        // not from the one before it: the count still goes on.
+        async.elapse(const Duration(milliseconds: 29999));
+        lose(daemons[2]);
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 3);
+        async.elapse(const Duration(seconds: 4));
+        expect(h.s.transport, same(daemons[3].transport));
+
+        // This one holds for the cap: the next loss is a new one.
+        async.elapse(const Duration(seconds: 30));
+        lose(daemons[3]);
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 1);
+      });
+    });
+
+    test('Retry after such a failure starts at attempt 1', () {
+      fakeAsync((async) {
+        final good = FakeDaemon();
+        final h = _Harness([
+          for (var i = 0; i < 6; i++) _noEventsDaemon().transport,
+          good.transport,
+          FakeDaemon().transport,
+        ]);
+        h.session.connect(agentA);
+        async.flushMicrotasks();
+        async.elapse(const Duration(seconds: 1 + 2 + 4 + 8 + 16));
+        expect(h.s.status, SessionStatus.failed);
+        expect(h.factory.builds, 6);
+
+        h.session.retry();
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 1);
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.connected);
+        expect(h.s.transport, same(good.transport));
+
+        // The count is the retry's own: one attempt used, not the five of the failure before it.
+        good.events.addError(const SocketException('reset'));
+        async.flushMicrotasks();
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 2);
+      });
+    });
+
+    test('a new connection starts the count again and disconnect leaves no timer behind', () {
+      fakeAsync((async) {
+        final d1 = FakeDaemon(), d2 = FakeDaemon(), d3 = FakeDaemon();
+        final h = _Harness([d1.transport, d2.transport, d3.transport, FakeDaemon().transport]);
+        connectThenLose(async, h, d1);
+        async.elapse(const Duration(seconds: 1));
+        expect(h.s.transport, same(d2.transport)); // reconnected a moment ago: one attempt is counted
+
+        h.session.disconnect();
+        async.flushMicrotasks();
+        expect(async.pendingTimers, isEmpty);
+
+        connectThenLose(async, h, d3, profile: agentB);
+        expect(h.s.status, SessionStatus.reconnecting);
+        expect(h.s.attempt, 1);
       });
     });
   });

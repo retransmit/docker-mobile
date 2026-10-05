@@ -80,6 +80,11 @@ class DockerSession extends StateNotifier<SessionState> {
 
   DockerApiClient? _client;
   Timer? _retryTimer;
+
+  /// Attempts used by reconnects whose events stream has not yet stayed up
+  /// for the policy cap; the next loss continues from here.
+  int _unsettled = 0;
+  Timer? _settleTimer;
   StreamSubscription<AppLifecycleState>? _lifecycleSub;
   /// Generation of the reconnect attempt in flight, if any. An attempt left
   /// over from an older generation never blocks one for the current one.
@@ -168,18 +173,28 @@ class DockerSession extends StateNotifier<SessionState> {
     }
   }
 
-  /// The events stream died (error or clean end): start reconnecting.
+  /// The events stream died (error or clean end): start reconnecting. A
+  /// reconnect counts as recovered only once the stream has stayed up for
+  /// the policy cap; a loss before that continues the attempt count, and
+  /// fails the session when the limit is used up.
   void livenessLost(DockerError error) {
     if (!mounted || state.status != SessionStatus.connected) return;
     // Drop pending refreshes too: they would hit the dead connection, and a reconnect refreshes everything.
     _hub.stop();
-    state = state.copyWith(status: SessionStatus.reconnecting, attempt: 1, error: error);
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    if (_unsettled >= _policy.maxAttempts) {
+      state = state.copyWith(status: SessionStatus.failed, error: error);
+      return;
+    }
+    state = state.copyWith(status: SessionStatus.reconnecting, attempt: _unsettled + 1, error: error);
     _scheduleAttempt();
   }
 
   /// From failed: try again now with a fresh attempt count.
   void retry() {
     if (state.status != SessionStatus.failed) return;
+    _unsettled = 0;
     state = state.copyWith(status: SessionStatus.reconnecting, attempt: 1);
     unawaited(_attemptReconnect());
   }
@@ -211,6 +226,9 @@ class DockerSession extends StateNotifier<SessionState> {
   void _stopActivity() {
     _retryTimer?.cancel();
     _retryTimer = null;
+    _settleTimer?.cancel();
+    _settleTimer = null;
+    _unsettled = 0;
     _hub.stop();
     _client = null;
   }
@@ -246,6 +264,13 @@ class DockerSession extends StateNotifier<SessionState> {
         return;
       }
       final old = state.transport;
+      // Recovered only once the events stream has stayed up for the cap.
+      _unsettled = state.attempt;
+      _settleTimer?.cancel();
+      _settleTimer = Timer(_policy.cap, () {
+        _settleTimer = null;
+        _unsettled = 0;
+      });
       _client = _clientFactory(built.transport, probe.apiVersion);
       state = state.copyWith(
         status: SessionStatus.connected,
