@@ -38,7 +38,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [ContainersScreen(), ImagesScreen(), NetworksScreen(), VolumesScreen(), SystemScreen()],
+        children: [
+          const ContainersScreen(),
+          const ImagesScreen(),
+          const NetworksScreen(),
+          const VolumesScreen(),
+          // Every tab stays mounted. The dashboard's disk-usage call can take
+          // minutes, so that one is fetched only while its tab shows.
+          SystemScreen(active: _index == 4),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
