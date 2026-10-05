@@ -62,9 +62,23 @@ class TlsTransport implements Transport {
   Stream<List<int>> _openStream(http.Request request, Duration headerBudget) {
     final controller = StreamController<List<int>>();
     StreamSubscription<List<int>>? sub;
+    var cancelled = false;
     controller.onListen = () async {
       try {
-        final response = await _client.send(request).timeout(headerBudget);
+        final pending = _client.send(request);
+        final http.StreamedResponse response;
+        try {
+          response = await pending.timeout(headerBudget);
+        } on TimeoutException {
+          // The response may still arrive, and nobody will read it then.
+          pending.then(_release).ignore();
+          rethrow;
+        }
+        if (cancelled) {
+          // The listener left while the headers were on their way.
+          _release(response);
+          return;
+        }
         if (response.statusCode != 200) {
           final body = await response.stream.bytesToString();
           controller.addError(DockerError.fromResponse(response.statusCode, body));
@@ -83,9 +97,16 @@ class TlsTransport implements Transport {
       }
     };
     // Cancel just stops reading; the shared client stays alive for other calls.
-    controller.onCancel = () async => sub?.cancel();
+    controller.onCancel = () async {
+      cancelled = true;
+      await sub?.cancel();
+    };
     return controller.stream;
   }
+
+  /// Lets go of the connection of a response that nobody will read: its body
+  /// would otherwise keep arriving until the transport is closed.
+  static void _release(http.StreamedResponse response) => unawaited(response.stream.listen((_) {}).cancel());
 
   @override
   Stream<List<int>> stream(String path, {Map<String, String>? query}) =>
