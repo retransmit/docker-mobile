@@ -4,32 +4,35 @@ import "testing"
 
 const id = "3f2a9c1b7d4e5f60718293a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e"
 
+// reads holds at least one path for every rule of the allow list, without an
+// API version in front.
+var reads = []string{
+	"/_ping",
+	"/version",
+	"/info",
+	"/system/df",
+	"/events",
+	"/containers/json",
+	"/containers/" + id + "/json",
+	"/containers/" + id + "/logs",
+	"/containers/" + id + "/stats",
+	"/containers/my_web-1.2/json",
+	"/images/json",
+	"/images/sha256:" + id + "/json",
+	"/images/sha256:" + id + "/history",
+	"/images/nginx:1.27/json",
+	"/images/ghcr.io/owner/app:latest/json",
+	"/images/registry.example.com:5000/team/app@sha256:" + id + "/history",
+	"/networks",
+	"/networks/" + id,
+	"/networks/bridge",
+	"/volumes",
+	"/volumes/pg_data",
+	"/agent/v1/whoami",
+}
+
 func TestEveryReadTheAppMakesIsAllowed(t *testing.T) {
-	paths := []string{
-		"/_ping",
-		"/version",
-		"/info",
-		"/system/df",
-		"/events",
-		"/containers/json",
-		"/containers/" + id + "/json",
-		"/containers/" + id + "/logs",
-		"/containers/" + id + "/stats",
-		"/containers/my_web-1.2/json",
-		"/images/json",
-		"/images/sha256:" + id + "/json",
-		"/images/sha256:" + id + "/history",
-		"/images/nginx:1.27/json",
-		"/images/ghcr.io/owner/app:latest/json",
-		"/images/registry.example.com:5000/team/app@sha256:" + id + "/history",
-		"/networks",
-		"/networks/" + id,
-		"/networks/bridge",
-		"/volumes",
-		"/volumes/pg_data",
-		"/agent/v1/whoami",
-	}
-	for _, p := range paths {
+	for _, p := range reads {
 		for _, prefix := range []string{"", "/v1.45", "/v1.41"} {
 			for _, method := range []string{"GET", "HEAD"} {
 				if !AllowedReadOnly(method, prefix+p) {
@@ -177,6 +180,62 @@ func TestImageNamesMayContainSlashesButNotReachOtherRoutes(t *testing.T) {
 	} {
 		if AllowedReadOnly("GET", p) {
 			t.Errorf("GET %s was allowed", p)
+		}
+	}
+}
+
+func TestNothingMayBeAddedToEitherEndOfARead(t *testing.T) {
+	// Adding "/x" to these two gives a read of its own, because the rule
+	// named beside each takes "x" as the name to inspect.
+	inspectsX := map[string]bool{
+		"/networks": true, // `^/networks/` + idSeg + `$`
+		"/volumes":  true, // `^/volumes/` + idSeg + `$`
+	}
+	for _, p := range reads {
+		for _, q := range []string{"/x" + p, p + "/"} {
+			if AllowedReadOnly("GET", q) {
+				t.Errorf("GET %s was allowed", q)
+			}
+		}
+		if got, want := AllowedReadOnly("GET", p+"/x"), inspectsX[p]; got != want {
+			t.Errorf("GET %s/x: allowed is %v, want %v", p, got, want)
+		}
+	}
+}
+
+func TestNearMissesOfARuleAreRefused(t *testing.T) {
+	paths := []string{
+		// An empty or "." segment inside an image name.
+		"/images/a//json",
+		"/images/a/./json",
+		// Only an image name may hold "/".
+		"/containers/a/b/json",
+		"/volumes/a/b",
+		// An image name starts with a letter or digit.
+		"/images/-x/json",
+		// The image list is the whole path, not the start of a longer one.
+		"/images/json/get",
+		"/images/json-server/get",
+		// The network and volume rules start at the root.
+		"/containers/networks/archive",
+		"/containers/volumes/export",
+		// An API version is "/v", digits, a dot, digits, at the very start.
+		"/v1x45/info",
+		"/x/v1.45/info",
+	}
+	for _, p := range paths {
+		if AllowedReadOnly("GET", p) {
+			t.Errorf("GET %s was allowed", p)
+		}
+	}
+}
+
+func TestTheMethodIsMatchedExactly(t *testing.T) {
+	for _, method := range []string{"get", "Get", "head", ""} {
+		for _, p := range reads {
+			if AllowedReadOnly(method, p) {
+				t.Errorf("%q %s was allowed", method, p)
+			}
 		}
 	}
 }
