@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 )
 
 // Dir is the state folder. Only the user the agent runs as may enter it.
@@ -39,7 +41,10 @@ func (d *Dir) Path(name string) string { return filepath.Join(d.path, name) }
 func (d *Dir) ReadFile(name string) ([]byte, error) { return os.ReadFile(d.Path(name)) }
 
 // WriteFile replaces a file atomically: the data goes to a temporary file in
-// the same folder (mode 0600), is synced, then renamed over the target.
+// the same folder (mode 0600), is synced, then renamed over the target, and
+// the folder is synced so the rename survives a power cut. When only that
+// last step fails the target has already been replaced: the error then means
+// "replaced, but not known to be durable".
 func (d *Dir) WriteFile(name string, data []byte) error {
 	tmp, err := os.CreateTemp(d.path, "."+name+".*")
 	if err != nil {
@@ -68,5 +73,28 @@ func (d *Dir) WriteFile(name string, data []byte) error {
 		os.Remove(tmpName)
 		return fmt.Errorf("write %s: %w", name, err)
 	}
+	if err := syncDir(d.path); err != nil {
+		return fmt.Errorf("write %s: %w", name, err)
+	}
 	return nil
+}
+
+// syncDir makes a rename inside the folder durable. Windows cannot sync a
+// folder and a few file systems refuse to (EINVAL); both are left alone.
+func syncDir(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = f.Sync()
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if errors.Is(err, syscall.EINVAL) {
+		return nil
+	}
+	return err
 }

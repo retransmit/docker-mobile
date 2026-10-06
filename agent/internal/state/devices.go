@@ -192,7 +192,9 @@ func (s *Devices) List() []Device {
 	return out
 }
 
-// Remove deletes a device. The bool is false when no device has that id.
+// Remove deletes a device. Check the error first: when it is set the removal
+// was not stored and the device is still paired, whatever the bool says.
+// Without an error the bool is false when no device has that id.
 func (s *Devices) Remove(id string) (Device, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

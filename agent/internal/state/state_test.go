@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,10 +19,23 @@ func openTemp(t *testing.T) *Dir {
 	return d
 }
 
-type clock struct{ t time.Time }
+// clock is a time source the tests set by hand. Goroutines may share it.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *clock) now() time.Time          { return c.t }
-func (c *clock) advance(d time.Duration) { c.t = c.t.Add(d) }
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 func newClock() *clock { return &clock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)} }
 
@@ -211,7 +225,8 @@ func TestADamagedFileStopsTheLoad(t *testing.T) {
 
 func TestAFailedWriteLeavesNoDeviceBehind(t *testing.T) {
 	d := openTemp(t)
-	s, _ := LoadDevices(d, newClock().now)
+	c := newClock()
+	s, _ := LoadDevices(d, c.now)
 	kept, keptToken, err := s.Add("kept", RoleFull)
 	if err != nil {
 		t.Fatal(err)
@@ -229,9 +244,12 @@ func TestAFailedWriteLeavesNoDeviceBehind(t *testing.T) {
 	if _, _, err := s.Remove(kept.ID); err == nil {
 		t.Fatal("Remove reported success although nothing could be stored")
 	}
-	// A device whose removal could not be stored keeps working.
+	// A device whose removal could not be stored keeps working. Two minutes
+	// on its last-seen time is due on disk; that write fails as well and
+	// must not lock the device out either.
+	c.advance(2 * time.Minute)
 	if _, ok := s.Authenticate(keptToken); !ok {
-		t.Fatal("the device was dropped although its removal failed")
+		t.Fatal("the device stopped working although only writes failed")
 	}
 }
 
@@ -255,5 +273,90 @@ func TestAddRejectsAnUnknownRole(t *testing.T) {
 	s, _ := LoadDevices(openTemp(t), newClock().now)
 	if _, _, err := s.Add("x", Role("admin")); err == nil {
 		t.Fatal("unknown role accepted")
+	}
+}
+
+func TestConcurrentUse(t *testing.T) {
+	d := openTemp(t)
+	c := newClock()
+	s, err := LoadDevices(d, c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, token, err := s.Add("first", RoleFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 300; j++ {
+				if got, ok := s.Authenticate(token); !ok || got.ID != first.ID {
+					t.Errorf("Authenticate = %+v, %v", got, ok)
+					return
+				}
+			}
+		}()
+	}
+
+	// Every second device added here is removed again; the others stay.
+	var kept []string
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 60; i++ {
+			dev, _, err := s.Add("other", RoleReadOnly)
+			if err != nil {
+				t.Errorf("Add: %v", err)
+				return
+			}
+			if len(s.List()) < 2 {
+				t.Errorf("the list lost a device")
+				return
+			}
+			if i%2 == 0 {
+				kept = append(kept, dev.ID)
+				continue
+			}
+			if _, ok, err := s.Remove(dev.ID); err != nil || !ok {
+				t.Errorf("Remove = %v, %v", ok, err)
+				return
+			}
+		}
+	}()
+
+	// The clock passes a minute five times, so last-seen times become due on
+	// disk while the others are at work.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 300; i++ {
+			if i%60 == 0 {
+				c.advance(61 * time.Second)
+			}
+			s.List()
+		}
+	}()
+
+	wg.Wait()
+
+	if _, ok := s.Authenticate(token); !ok {
+		t.Fatal("the first device no longer authenticates")
+	}
+	want := map[string]bool{first.ID: true}
+	for _, id := range kept {
+		want[id] = true
+	}
+	list := s.List()
+	if len(list) != len(want) {
+		t.Fatalf("list has %d devices, want %d", len(list), len(want))
+	}
+	for _, dev := range list {
+		if !want[dev.ID] {
+			t.Fatalf("device %s is in the list but was removed", dev.ID)
+		}
 	}
 }
