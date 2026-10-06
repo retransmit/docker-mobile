@@ -1,4 +1,4 @@
-module github.com/0xLennox07/docker-mobile/agent
+module github.com/retransmit/docker-mobile/agent
 
 go 1.23
 

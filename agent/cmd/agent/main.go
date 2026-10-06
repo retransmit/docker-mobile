@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/0xLennox07/docker-mobile/agent/internal/config"
-	"github.com/0xLennox07/docker-mobile/agent/internal/server"
+	"github.com/retransmit/docker-mobile/agent/internal/config"
+	"github.com/retransmit/docker-mobile/agent/internal/server"
 )
 
 func main() {

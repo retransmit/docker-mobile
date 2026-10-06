@@ -7,7 +7,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 
-	"github.com/0xLennox07/docker-mobile/agent/internal/dockerhost"
+	"github.com/retransmit/docker-mobile/agent/internal/dockerhost"
 )
 
 func New(dockerHost string) (http.Handler, error) {

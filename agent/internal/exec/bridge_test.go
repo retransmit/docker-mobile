@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/0xLennox07/docker-mobile/agent/internal/auth"
 	"github.com/gorilla/websocket"
+	"github.com/retransmit/docker-mobile/agent/internal/auth"
 )
 
 // fakeExecStart serves one connection: records the request, replies with

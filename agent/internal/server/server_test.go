@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/0xLennox07/docker-mobile/agent/internal/config"
+	"github.com/retransmit/docker-mobile/agent/internal/config"
 )
 
 func fakeDaemon() *httptest.Server {

@@ -5,10 +5,10 @@ package server
 import (
 	"net/http"
 
-	"github.com/0xLennox07/docker-mobile/agent/internal/auth"
-	"github.com/0xLennox07/docker-mobile/agent/internal/config"
-	"github.com/0xLennox07/docker-mobile/agent/internal/exec"
-	"github.com/0xLennox07/docker-mobile/agent/internal/proxy"
+	"github.com/retransmit/docker-mobile/agent/internal/auth"
+	"github.com/retransmit/docker-mobile/agent/internal/config"
+	"github.com/retransmit/docker-mobile/agent/internal/exec"
+	"github.com/retransmit/docker-mobile/agent/internal/proxy"
 )
 
 func Handler(cfg config.Config) (http.Handler, error) {
