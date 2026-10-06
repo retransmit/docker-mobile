@@ -15,6 +15,7 @@ type vectors struct {
 	Proofs []struct {
 		Name           string `json:"name"`
 		Code           string `json:"code"`
+		Typed          string `json:"typed"`
 		FingerprintHex string `json:"fingerprintHex"`
 		PhoneNonceHex  string `json:"phoneNonceHex"`
 		AgentNonceHex  string `json:"agentNonceHex"`
@@ -65,7 +66,10 @@ func unhex(t *testing.T, s string) []byte {
 func TestProofsMatchTheSharedVectors(t *testing.T) {
 	for _, p := range loadVectors(t).Proofs {
 		fp, np, na := unhex(t, p.FingerprintHex), unhex(t, p.PhoneNonceHex), unhex(t, p.AgentNonceHex)
-		if got := hex.EncodeToString(proofKey(p.Code)); got != p.KeyHex {
+		if got, ok := Normalize(p.Typed); !ok || got != p.Code {
+			t.Errorf("%s: Normalize(%q) = %q, %v, want %q", p.Name, p.Typed, got, ok, p.Code)
+		}
+		if got := hex.EncodeToString(proofKey(p.Code, np)); got != p.KeyHex {
 			t.Errorf("%s: key = %s, want %s", p.Name, got, p.KeyHex)
 		}
 		if got := hex.EncodeToString(PhoneProof(p.Code, fp, np)); got != p.PhoneProofHex {
@@ -108,6 +112,32 @@ func TestAProofDependsOnEveryInput(t *testing.T) {
 	}
 	if bytes.Equal(AgentProof("K7QM2XPA9TRC", fp, np, na), AgentProof("K7QM2XPA9TRC", fp, np, other)) {
 		t.Error("the agent proof ignores the agent nonce")
+	}
+}
+
+func TestTheKeyDependsOnThePhoneNonceAndTheCode(t *testing.T) {
+	one := bytes.Repeat([]byte{2}, NonceLen)
+	other := bytes.Repeat([]byte{9}, NonceLen)
+	if bytes.Equal(proofKey("K7QM2XPA9TRC", one), proofKey("K7QM2XPA9TRC", other)) {
+		t.Error("one code gives the same key for two phone nonces")
+	}
+	// Among the vectors, two entries share a phone nonce and differ in code.
+	proofs := loadVectors(t).Proofs
+	pairs := 0
+	for i, a := range proofs {
+		for _, b := range proofs[i+1:] {
+			if a.PhoneNonceHex != b.PhoneNonceHex || a.Code == b.Code {
+				continue
+			}
+			pairs++
+			np := unhex(t, a.PhoneNonceHex)
+			if bytes.Equal(proofKey(a.Code, np), proofKey(b.Code, np)) {
+				t.Errorf("%s and %s: two codes give the same key for one phone nonce", a.Name, b.Name)
+			}
+		}
+	}
+	if pairs == 0 {
+		t.Fatal("no two vectors share a phone nonce and differ in code")
 	}
 }
 

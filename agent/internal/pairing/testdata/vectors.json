@@ -1,35 +1,38 @@
 {
-  "note": "Shared with the app. key: PBKDF2-HMAC-SHA256(password = the 12 ASCII bytes of the code, salt = 'docker-mobile pair v1', rounds = 100000, length = 32 bytes). proofs: HMAC-SHA256 keyed with that key over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) fingerprint phoneNonce [agentNonce]. normalization: what a typed code becomes (null = rejected). links: the link the agent shows for the six fields; an empty host, port, fingerprint, scheme or name is left out, and values are form-encoded (a space is '+', a reserved or non-ASCII character is %XX for each UTF-8 byte).",
+  "note": "Shared with the app. key: PBKDF2-HMAC-SHA256(password = the 12 ASCII bytes of the code, salt = 'docker-mobile pair v1' 00 phoneNonce, rounds = 100000, length = 32 bytes); the salt is the context string, one zero byte, then the phone nonce, 54 bytes in all, so both proofs of one attempt have the same key and no other attempt has it. proofs: HMAC-SHA256 keyed with that key over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) as one byte, fingerprint, phoneNonce, [agentNonce]. typed (in proofs): one way a person might enter that code; it is normalized first, and what is stretched is the result, code. normalization: what a typed code becomes (null = rejected). links: the link the agent shows for the six fields; an empty host, port, fingerprint, scheme or name is left out, and values are form-encoded (a space is '+', a reserved or non-ASCII character is %XX for each UTF-8 byte).",
   "proofs": [
     {
       "name": "pinned certificate",
       "code": "K7QM2XPA9TRC",
+      "typed": "k7qm-2xpa-9trc",
       "fingerprintHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
       "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
-      "keyHex": "39231b583a4813def69a652cdfb5cd8c093b7292dcb8d841ceea386eb1c64b04",
-      "phoneProofHex": "d15073614bee6324b21b429397810e3c305a7c46e8f6f68f6657491e92600a73",
-      "agentProofHex": "0548c503207f4e5a5262822802b5a740d9b631dc202b6682af065a96dbf9d27d"
+      "keyHex": "ab82b066aadbd2d286357033e67c6a5a40d0bbdb72e3bc71f28186715f5863c9",
+      "phoneProofHex": "8513841281ab543d50acbc51d19905198ebfcfc8e32bd9b4171d0dad69168417",
+      "agentProofHex": "b11a58f3ed9c02c8d6a74324517b68a461f34096a538d752c99ad10bb1697b4f"
     },
     {
       "name": "second pinned certificate",
       "code": "0123456789AB",
+      "typed": "o123 4567 89ab",
       "fingerprintHex": "03a231792349424dc65f1b5f9ca83beff282966a02fb57741bb89c83c2651119",
       "phoneNonceHex": "4bb55ab4d5a8a2bb16af8bd6e966b60ac68dd4e482b8d9085d4dc83f3a237027",
       "agentNonceHex": "d3a5a4f9f1621065d377bfc50571af708b54b666e77a923242485bb476b8b91d",
-      "keyHex": "9ebc85c88d54ff2801735859161806506e7508c8552c396ebc7734027dc9ba9f",
-      "phoneProofHex": "b038faae3791acfc7111b033e344b9d9929024f133fab243851d890baf61fae0",
-      "agentProofHex": "9425a561e3c0521b6ed240e9931f6813b706111d53d5bc1c9694a3dc5b28f048"
+      "keyHex": "3883572731ef45d28535c4753c295fe18186f546158ae58e03372c5d9be333f8",
+      "phoneProofHex": "fce292dac41f1d195692f7476ba54fadc2e195078307f149cc09de5730cce2bf",
+      "agentProofHex": "58e520f14a9ee46198c9dda4354e611124b35e35f4973699fadf8e8cddf0f46d"
     },
     {
       "name": "no pinned certificate (behind a proxy)",
       "code": "ZZZZZZZZZZZZ",
+      "typed": "zzzz-zzzz-zzzz",
       "fingerprintHex": "",
       "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
       "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
-      "keyHex": "409df586139082b24a6af3cc821d61da0da42e95b43857929ab219a0a88434ab",
-      "phoneProofHex": "c29667751132714735af6bb0b326c274b6e921bbbbf5577102ae9615ec92507f",
-      "agentProofHex": "5ab0852dabcc6eb722142682c594bff5f6f9f12d4a1149a65a4d1c9d587d632f"
+      "keyHex": "9a4abb7e2aa7f841a59634e84b3478468623f9ebd776b103bae3f3b27ab9d860",
+      "phoneProofHex": "124d82bf616bef9819262c33dc825d438adbcb455bd8589ed393faa9c5c9ef62",
+      "agentProofHex": "0ca8fbccc07625fdb29b39ac4237f384c727e5a6c19b9ac8d31440b821b1df8b"
     }
   ],
   "normalization": [
@@ -104,6 +107,34 @@
     {
       "input": "k7qm-2xpa-9tru",
       "code": null
+    },
+    {
+      "input": "\u212a7QM-2XPA-9TRC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TR\u0130",
+      "code": null
+    },
+    {
+      "input": "0123456789ab",
+      "code": "0123456789AB"
+    },
+    {
+      "input": "cdefghjkmnpq",
+      "code": "CDEFGHJKMNPQ"
+    },
+    {
+      "input": "rstvwxyz0000",
+      "code": "RSTVWXYZ0000"
+    },
+    {
+      "input": "K7-QM2XPA9TRC",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "K7QM--2XPA--9TRC",
+      "code": "K7QM2XPA9TRC"
     }
   ],
   "links": [
@@ -133,6 +164,15 @@
       "code": "K7QM2XPA9TRC",
       "name": "R&D = lab #1 + 50% caf\u00e9",
       "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI&h=my-server.lan&n=R%26D+%3D+lab+%231+%2B+50%25+caf%C3%A9&p=8443&v=1"
+    },
+    {
+      "host": "10.0.0.7",
+      "port": "8443",
+      "fingerprint": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "scheme": "",
+      "code": "K7QM2XPA9TRC",
+      "name": "",
+      "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&h=10.0.0.7&p=8443&v=1"
     }
   ]
 }

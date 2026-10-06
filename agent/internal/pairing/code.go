@@ -76,14 +76,15 @@ func Format(code string) string {
 	return code[0:4] + "-" + code[4:8] + "-" + code[8:12]
 }
 
-// proofContext names the exchange and its version. It is the salt of the
-// key and the first part of what both proofs authenticate.
+// proofContext names the exchange and its version. It is the first part of
+// the salt of the key and the first part of what both proofs authenticate.
 const proofContext = "docker-mobile pair v1"
 
 // stretchRounds is how many rounds of PBKDF2 turn a code into the key of the
 // proofs. A code holds only 60 bits, so whoever has seen one proof can try
 // every code against it; the rounds make each of those tries cost this many
-// times more.
+// times more, and the salt (see proofKey) keeps them from being prepared
+// before the proof is seen.
 const stretchRounds = 100000
 
 // NonceLen is the length of the random value each side contributes.
@@ -91,6 +92,9 @@ const NonceLen = 32
 
 // PhoneProof is what the phone sends: an HMAC keyed with the stretched code
 // over the fingerprint the phone sees on its connection and its own nonce.
+// The nonce also salts the stretch (see proofKey), so the key is good for
+// this one attempt and no other. That is why the phone must draw a fresh,
+// random nonce for every attempt.
 //
 // code is a canonical code of CodeLen characters. fingerprint is 32 bytes,
 // or empty when the agent has no certificate of its own (it runs behind a
@@ -102,9 +106,10 @@ func PhoneProof(code string, fingerprint, phoneNonce []byte) []byte {
 	return proof(code, "phone", fingerprint, phoneNonce)
 }
 
-// AgentProof is the answer: the same construction, keyed with the stretched
-// code as well, with the other label and both nonces, so the phone knows the
-// agent holds the code too.
+// AgentProof is the answer: the same construction with the other label and
+// both nonces, so the phone knows the agent holds the code too. Its key is
+// the key of the phone's proof: the stretch is salted with the phone's
+// nonce, and both proofs of one attempt carry that nonce.
 //
 // It expects what PhoneProof expects, and agentNonce is NonceLen bytes too.
 // The two nonces are written one after the other with nothing between them,
@@ -114,19 +119,31 @@ func AgentProof(code string, fingerprint, phoneNonce, agentNonce []byte) []byte 
 	return proof(code, "agent", fingerprint, phoneNonce, agentNonce)
 }
 
-// proofKey stretches a code into the 32-byte key of both proofs.
-func proofKey(code string) []byte {
-	key, err := pbkdf2.Key(sha256.New, code, []byte(proofContext), stretchRounds, sha256.Size)
+// proofKey stretches a code into the 32-byte key of both proofs of one
+// attempt. The salt is proofContext, a zero byte and the phone's nonce.
+//
+// The nonce is in the salt so that a key computed for one attempt is useless
+// for any other: nothing can be stretched ahead of time and kept for a
+// pairing that is still to come. This holds only while the phone's nonce is
+// fresh and random for every attempt, so that nobody knows it beforehand.
+func proofKey(code string, phoneNonce []byte) []byte {
+	salt := make([]byte, 0, len(proofContext)+1+len(phoneNonce))
+	salt = append(salt, proofContext...)
+	salt = append(salt, 0)
+	salt = append(salt, phoneNonce...)
+	key, err := pbkdf2.Key(sha256.New, code, salt, stretchRounds, sha256.Size)
 	if err != nil {
-		// Only parameters the library refuses lead here, and every one of
-		// them is a constant.
+		// Only parameters the library refuses lead here, and nothing a
+		// caller passes is one of them: the hash, the rounds and the length
+		// are constants, and the salt is never shorter than proofContext.
 		panic("pairing: stretching the code: " + err.Error())
 	}
 	return key
 }
 
 func proof(code, who string, fingerprint []byte, nonces ...[]byte) []byte {
-	mac := hmac.New(sha256.New, proofKey(code))
+	// The first nonce is the phone's; both callers pass it.
+	mac := hmac.New(sha256.New, proofKey(code, nonces[0]))
 	mac.Write([]byte(proofContext))
 	mac.Write([]byte{0})
 	mac.Write([]byte(who))
