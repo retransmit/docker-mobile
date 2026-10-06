@@ -1,0 +1,70 @@
+{
+  "note": "Shared with the app. proofs: HMAC-SHA256 keyed with the 12 ASCII bytes of the code over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) fingerprint phoneNonce [agentNonce]. normalization: what a typed code becomes (null = rejected).",
+  "proofs": [
+    {
+      "name": "pinned certificate",
+      "code": "K7QM2XPA9TRC",
+      "fingerprintHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
+      "phoneProofHex": "ffab0ccdb7d16bb8e6cbdc3d2ce216c8467ca695f06ee000ce394fbc9470f69e",
+      "agentProofHex": "de7767c3976036648cd8644bb2e77983229a72cf95c19b59592497984d2fc2d9"
+    },
+    {
+      "name": "second pinned certificate",
+      "code": "0123456789AB",
+      "fingerprintHex": "03a231792349424dc65f1b5f9ca83beff282966a02fb57741bb89c83c2651119",
+      "phoneNonceHex": "4bb55ab4d5a8a2bb16af8bd6e966b60ac68dd4e482b8d9085d4dc83f3a237027",
+      "agentNonceHex": "d3a5a4f9f1621065d377bfc50571af708b54b666e77a923242485bb476b8b91d",
+      "phoneProofHex": "4b5178f9945bcfec0126c81ff6d20680a875ad0629849011f51bb7cd59e1c70b",
+      "agentProofHex": "d60a80c27fa89919513ac9d7f9c3fcf617887a20761b36df9d96512860a22e9c"
+    },
+    {
+      "name": "no pinned certificate (behind a proxy)",
+      "code": "ZZZZZZZZZZZZ",
+      "fingerprintHex": "",
+      "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
+      "phoneProofHex": "cb1e6223e27a87a68bab5c8f93777aabc5a03f451c72dd3fba342cbdbf7ea3ed",
+      "agentProofHex": "830537614741d294c08417a6ef8a1b0a02b2e2749d84da74a7ab67f18757ef4f"
+    }
+  ],
+  "normalization": [
+    {
+      "input": "K7QM-2XPA-9TRC",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "k7qm 2xpa 9trc",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": " k7qm2xpa9trc ",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "OIL0-oil0-OIL0",
+      "code": "011001100110"
+    },
+    {
+      "input": "K7QM-2XPA-9TR",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TRCC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TRU",
+      "code": null
+    },
+    {
+      "input": "K7QM_2XPA_9TRC",
+      "code": null
+    },
+    {
+      "input": "",
+      "code": null
+    }
+  ]
+}
