@@ -18,6 +18,7 @@ type vectors struct {
 		FingerprintHex string `json:"fingerprintHex"`
 		PhoneNonceHex  string `json:"phoneNonceHex"`
 		AgentNonceHex  string `json:"agentNonceHex"`
+		KeyHex         string `json:"keyHex"`
 		PhoneProofHex  string `json:"phoneProofHex"`
 		AgentProofHex  string `json:"agentProofHex"`
 	} `json:"proofs"`
@@ -25,6 +26,15 @@ type vectors struct {
 		Input string  `json:"input"`
 		Code  *string `json:"code"`
 	} `json:"normalization"`
+	Links []struct {
+		Host        string `json:"host"`
+		Port        string `json:"port"`
+		Fingerprint string `json:"fingerprint"`
+		Scheme      string `json:"scheme"`
+		Code        string `json:"code"`
+		Name        string `json:"name"`
+		Link        string `json:"link"`
+	} `json:"links"`
 }
 
 func loadVectors(t *testing.T) vectors {
@@ -37,7 +47,7 @@ func loadVectors(t *testing.T) vectors {
 	if err := json.Unmarshal(raw, &v); err != nil {
 		t.Fatal(err)
 	}
-	if len(v.Proofs) == 0 || len(v.Normalization) == 0 {
+	if len(v.Proofs) == 0 || len(v.Normalization) == 0 || len(v.Links) == 0 {
 		t.Fatal("the vectors file is empty")
 	}
 	return v
@@ -55,6 +65,9 @@ func unhex(t *testing.T, s string) []byte {
 func TestProofsMatchTheSharedVectors(t *testing.T) {
 	for _, p := range loadVectors(t).Proofs {
 		fp, np, na := unhex(t, p.FingerprintHex), unhex(t, p.PhoneNonceHex), unhex(t, p.AgentNonceHex)
+		if got := hex.EncodeToString(proofKey(p.Code)); got != p.KeyHex {
+			t.Errorf("%s: key = %s, want %s", p.Name, got, p.KeyHex)
+		}
 		if got := hex.EncodeToString(PhoneProof(p.Code, fp, np)); got != p.PhoneProofHex {
 			t.Errorf("%s: phone proof = %s, want %s", p.Name, got, p.PhoneProofHex)
 		}
@@ -158,5 +171,14 @@ func TestLink(t *testing.T) {
 	}
 	if only := Link(LinkParams{Fingerprint: "abc", Code: "K7QM2XPA9TRC"}); only != "dockermobile://pair?c=K7QM2XPA9TRC&f=abc&v=1" {
 		t.Fatalf("Link without an address = %s", only)
+	}
+}
+
+func TestLinkMatchesTheSharedVectors(t *testing.T) {
+	for _, l := range loadVectors(t).Links {
+		got := Link(LinkParams{Host: l.Host, Port: l.Port, Fingerprint: l.Fingerprint, Scheme: l.Scheme, Code: l.Code, Name: l.Name})
+		if got != l.Link {
+			t.Errorf("Link for %q =\n %s\nwant\n %s", l.Name, got, l.Link)
+		}
 	}
 }

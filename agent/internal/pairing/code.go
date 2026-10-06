@@ -5,6 +5,7 @@ package pairing
 
 import (
 	"crypto/hmac"
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -32,12 +33,22 @@ func NewCode(rand io.Reader) (string, error) {
 	return string(out), nil
 }
 
-// Normalize turns what a person typed into the canonical code: upper case,
-// hyphens and spaces dropped, O read as 0, I and L as 1. The bool is false
-// when the result is not a valid code.
+// Normalize turns what a person typed into the canonical code: the letters a
+// to z made upper case, hyphens and spaces dropped, O read as 0, I and L as
+// 1. The bool is false when the result is not a valid code.
+//
+// Only ASCII is accepted. Anything above 127 is refused as it is, before any
+// change of case, so that no letter of another script can turn into one of
+// the alphabet on the way.
 func Normalize(input string) (string, bool) {
 	var b strings.Builder
-	for _, r := range strings.ToUpper(input) {
+	for _, r := range input {
+		if r > 127 {
+			return "", false
+		}
+		if r >= 'a' && r <= 'z' {
+			r -= 'a' - 'A'
+		}
 		switch r {
 		case '-', ' ':
 			continue
@@ -46,7 +57,7 @@ func Normalize(input string) (string, bool) {
 		case 'I', 'L':
 			r = '1'
 		}
-		if r > 127 || !strings.ContainsRune(alphabet, r) {
+		if !strings.ContainsRune(alphabet, r) {
 			return "", false
 		}
 		b.WriteRune(r)
@@ -65,28 +76,58 @@ func Format(code string) string {
 	return code[0:4] + "-" + code[4:8] + "-" + code[8:12]
 }
 
-const context = "docker-mobile pair v1"
+// proofContext names the exchange and its version. It is the salt of the
+// key and the first part of what both proofs authenticate.
+const proofContext = "docker-mobile pair v1"
+
+// stretchRounds is how many rounds of PBKDF2 turn a code into the key of the
+// proofs. A code holds only 60 bits, so whoever has seen one proof can try
+// every code against it; the rounds make each of those tries cost this many
+// times more.
+const stretchRounds = 100000
 
 // NonceLen is the length of the random value each side contributes.
 const NonceLen = 32
 
-// PhoneProof is what the phone sends: an HMAC keyed with the code over the
-// fingerprint the phone sees on its connection and its own nonce.
-// fingerprint is 32 bytes, or empty when the agent has no certificate of its
-// own (it runs behind a proxy that terminates TLS).
+// PhoneProof is what the phone sends: an HMAC keyed with the stretched code
+// over the fingerprint the phone sees on its connection and its own nonce.
+//
+// code is a canonical code of CodeLen characters. fingerprint is 32 bytes,
+// or empty when the agent has no certificate of its own (it runs behind a
+// proxy that terminates TLS). phoneNonce is NonceLen bytes. None of this is
+// checked here: the length of the fingerprint is written as a single byte
+// and the nonce is written without one, so the caller must check the length
+// of anything that came from the network before calling.
 func PhoneProof(code string, fingerprint, phoneNonce []byte) []byte {
 	return proof(code, "phone", fingerprint, phoneNonce)
 }
 
-// AgentProof is the answer: the same construction with the other label and
-// both nonces, so the phone knows the agent holds the code too.
+// AgentProof is the answer: the same construction, keyed with the stretched
+// code as well, with the other label and both nonces, so the phone knows the
+// agent holds the code too.
+//
+// It expects what PhoneProof expects, and agentNonce is NonceLen bytes too.
+// The two nonces are written one after the other with nothing between them,
+// so here as well the caller must check the lengths of anything that came
+// from the network before calling.
 func AgentProof(code string, fingerprint, phoneNonce, agentNonce []byte) []byte {
 	return proof(code, "agent", fingerprint, phoneNonce, agentNonce)
 }
 
+// proofKey stretches a code into the 32-byte key of both proofs.
+func proofKey(code string) []byte {
+	key, err := pbkdf2.Key(sha256.New, code, []byte(proofContext), stretchRounds, sha256.Size)
+	if err != nil {
+		// Only parameters the library refuses lead here, and every one of
+		// them is a constant.
+		panic("pairing: stretching the code: " + err.Error())
+	}
+	return key
+}
+
 func proof(code, who string, fingerprint []byte, nonces ...[]byte) []byte {
-	mac := hmac.New(sha256.New, []byte(code))
-	mac.Write([]byte(context))
+	mac := hmac.New(sha256.New, proofKey(code))
+	mac.Write([]byte(proofContext))
 	mac.Write([]byte{0})
 	mac.Write([]byte(who))
 	mac.Write([]byte{0})
