@@ -1,0 +1,5 @@
+{
+  "note": "Shared with the app: a certificate (DER, base64) and the fingerprint both sides must compute for it. The fingerprint is SHA-256 over the SubjectPublicKeyInfo, base64url without padding.",
+  "certificateDerBase64": "MIIBkDCCATWgAwIBAgIQTlYK/6Ng/przNr5TaGAH+zAKBggqhkjOPQQDAjAeMRwwGgYDVQQDExNkb2NrZXItbW9iaWxlLWFnZW50MB4XDTI2MTAwNjIzMDAwMFoXDTM2MTAwNDAwMDAwMFowHjEcMBoGA1UEAxMTZG9ja2VyLW1vYmlsZS1hZ2VudDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABIpvPZWDBjV6m4jtmCvLMQDnsu9QVaGkH9UpanF9uD7HhWvbvBRv7ec0S1Am2wWRPco5T3JB1KRjXTRZgUGpiOyjVTBTMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAMBgNVHRMBAf8EAjAAMB4GA1UdEQQXMBWCE2RvY2tlci1tb2JpbGUtYWdlbnQwCgYIKoZIzj0EAwIDSQAwRgIhAKrSPOzFRTr7ajlxCvyfE2nuYJom67O9/mos+ebp/TtVAiEApIRIJFcOTl5RBXW+QAkFwsNa2om4gaP6rxsEAEg5C60=",
+  "fingerprint": "OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI"
+}
