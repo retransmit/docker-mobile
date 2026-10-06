@@ -140,3 +140,65 @@ func TestExecBridgeEchoesBothDirections(t *testing.T) {
 		t.Fatalf("echo = %q, want hello", data)
 	}
 }
+
+func TestEndingTheRequestContextClosesTheTerminal(t *testing.T) {
+	// Fake daemon: accept the exec start, reply 101, then stay silent.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	started := make(chan struct{})
+	daemonSawEnd := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return
+		}
+		io.ReadAll(req.Body)
+		io.WriteString(conn, "HTTP/1.1 101 UPGRADED\r\n\r\n")
+		close(started)
+		io.Copy(io.Discard, br) // returns when the agent closes its side
+		close(daemonSawEnd)
+	}()
+
+	h, err := NewHandler("tcp://" + ln.Addr().String())
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("id", "abc")
+		h.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	defer srv.Close()
+
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/exec/abc/ws", nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the exec never started")
+	}
+	cancel() // the device was removed, or the agent is stopping
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := c.ReadMessage(); err == nil {
+		t.Fatal("the terminal stayed open")
+	}
+	select {
+	case <-daemonSawEnd:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the connection to the daemon stayed open")
+	}
+}

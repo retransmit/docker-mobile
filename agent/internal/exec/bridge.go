@@ -87,9 +87,9 @@ func NewHandler(dockerHost string) (http.Handler, error) {
 		return nil, err
 	}
 	// Default CheckOrigin enforces same-origin when an Origin header is present
-	// and allows it when absent (the native-app client sends none). The exec
-	// session is also gated by bearer-token auth (RequireToken), so this is
-	// defense-in-depth against a browser client, not the primary control.
+	// and allows it when absent (the app sends none). The server refuses any
+	// request with an Origin header before it gets here, and the route is
+	// behind authentication, so this is a third line of defence.
 	upgrader := websocket.Upgrader{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("id")
@@ -108,6 +108,13 @@ func NewHandler(dockerHost string) (http.Handler, error) {
 			return
 		}
 		defer conn.Close()
+		// The request's context ends when the device is removed or the agent
+		// stops. Closing both ends then unblocks the copy loops below.
+		stop := context.AfterFunc(r.Context(), func() {
+			ws.Close()
+			conn.Close()
+		})
+		defer stop()
 		bridge(ws, conn)
 	}), nil
 }

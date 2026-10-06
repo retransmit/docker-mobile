@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -102,5 +103,50 @@ func TestProxyStreamsIncrementally(t *testing.T) {
 	rest, _ := io.ReadAll(resp.Body)
 	if string(rest) != "second\n" {
 		t.Fatalf("rest = %q, want %q", rest, "second\n")
+	}
+}
+
+func TestTheBearerTokenIsNotForwarded(t *testing.T) {
+	var got http.Header
+	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Write([]byte("{}"))
+	}))
+	defer daemon.Close()
+	h, err := New("tcp://" + daemon.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/images/create?fromImage=nginx", nil)
+	req.Header.Set("Authorization", "Bearer dm1.abcd1234.secret")
+	req.Header.Set("X-Registry-Auth", "registry-credentials")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got.Get("Authorization") != "" {
+		t.Fatalf("the daemon saw Authorization: %q", got.Get("Authorization"))
+	}
+	if got.Get("X-Registry-Auth") != "registry-credentials" {
+		t.Fatal("X-Registry-Auth was not forwarded")
+	}
+}
+
+func TestAnUnreachableDaemonIsAJSON502(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close() // nothing listens there any more
+	h, err := New("tcp://" + addr)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/containers/json", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want 502", rec.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["message"] != "The agent cannot reach the Docker daemon" {
+		t.Fatalf("body = %q", rec.Body.String())
 	}
 }
