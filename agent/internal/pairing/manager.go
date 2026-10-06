@@ -83,13 +83,22 @@ type pending struct {
 }
 
 // NewManager returns a manager that reads time and randomness from the
-// given sources.
+// given sources. Both must be safe for use by several goroutines at once, as
+// time.Now and crypto/rand.Reader are: the manager's methods may be called
+// concurrently, and Start uses both outside the manager's lock.
 func NewManager(now func() time.Time, rand io.Reader) *Manager {
 	return &Manager{now: now, rand: rand}
 }
 
 // Start begins a pairing, replacing any pending one. The channel delivers
-// exactly one Result.
+// exactly one Result, at the moment the pairing ends.
+//
+// Running out of time does not end a pairing by itself: the manager has no
+// timer of its own. A pairing past ExpiresAt can no longer be redeemed, but
+// it stays pending, and its channel silent, until Redeem or Expire is next
+// called and ends it as expired, or until Cancel or another Start ends it.
+// Whoever waits on the channel therefore arranges for Expire to be called
+// at ExpiresAt.
 func (m *Manager) Start(role state.Role, name string) (Pairing, <-chan Result, error) {
 	if !role.Valid() {
 		return Pairing{}, nil, fmt.Errorf("unknown role %q", role)
