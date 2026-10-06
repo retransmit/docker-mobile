@@ -3,17 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
 
-/// Tears down the active connection and returns to the profiles list:
-/// pop first (disposing the home screen + its providers), then detach and
-/// close the transport (best-effort).
-Future<void> disconnect(BuildContext context, WidgetRef ref) async {
-  final navigator = Navigator.of(context);
-  final transport = ref.read(transportProvider);
-  navigator.popUntil((r) => r.isFirst);
-  ref.read(transportProvider.notifier).state = null;
-  // Best-effort teardown: the UI is already back at the list, so a close
-  // failure must not surface as an unhandled async error.
-  try {
-    await transport?.close();
-  } catch (_) {}
+/// Returns to the Connections list, then tears the session down: pop first
+/// (disposing the screens that watch the connection), then disconnect.
+/// Pass [navigator] when [context] sits above the app's navigator.
+Future<void> disconnect(BuildContext context, WidgetRef ref, {NavigatorState? navigator}) async {
+  final nav = navigator ?? Navigator.of(context);
+  final session = ref.read(sessionProvider.notifier);
+  nav.popUntil((r) => r.isFirst);
+  await session.disconnect();
 }

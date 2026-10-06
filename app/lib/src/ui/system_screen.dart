@@ -19,10 +19,15 @@ String _humanSize(int bytes) {
 }
 
 class SystemScreen extends ConsumerWidget {
-  const SystemScreen({super.key});
+  const SystemScreen({super.key, this.active = true});
+
+  /// False while another Home tab is showing: the dashboard is then not
+  /// watched, so nothing refetches it until the tab is opened.
+  final bool active;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (!active) return const SizedBox.shrink();
     final dash = ref.watch(systemDashboardProvider);
     return Scaffold(
       appBar: AppBar(

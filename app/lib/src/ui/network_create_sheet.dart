@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models/docker_network.dart';
 import '../state/providers.dart';
+import 'route_is_open.dart';
 import 'widgets/key_value_editor.dart';
 
 class _SubnetRow {
@@ -53,7 +54,6 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
       await client.createNetwork(
@@ -69,8 +69,9 @@ class _NetworkCreateSheetState extends ConsumerState<NetworkCreateSheet> {
         labels: _labels,
         options: _options,
       );
+      if (!mounted) return;
       ref.invalidate(networksProvider);
-      navigator.pop();
+      closeRoute(context);
       messenger.showSnackBar(const SnackBar(content: Text('Network created')));
     } catch (e) {
       if (mounted) setState(() => _busy = false); // sheet may be popped mid-flight

@@ -47,7 +47,7 @@ class SshTransport implements Transport {
     try {
       conn = await _openDuplex();
     } catch (e, st) {
-      Error.throwWithStackTrace(DockerError.wrap(e), st);
+      Error.throwWithStackTrace(mapSshError(e), st);
     }
     try {
       final h = <String, String>{...?headers};
@@ -61,7 +61,7 @@ class SshTransport implements Transport {
       final r = await readBufferedResponse(conn.input);
       return http.Response.bytes(r.body, r.statusCode, headers: r.headers);
     } catch (e, st) {
-      Error.throwWithStackTrace(DockerError.wrap(e), st);
+      Error.throwWithStackTrace(mapSshError(e), st);
     } finally {
       await conn.close();
     }
@@ -111,7 +111,9 @@ class SshTransport implements Transport {
 
     return attempt().timeout(budget, onTimeout: () {
       timedOut = true;
-      throw TimeoutException('No response from the daemon within $budget', budget);
+      // Already the daemon timeout every transport reports: left as a bare
+      // TimeoutException, mapSshError would call it a timed-out SSH connection.
+      throw DockerError.fromException(TimeoutException('No response from the daemon within $budget', budget));
     });
   }
 
@@ -152,7 +154,7 @@ class SshTransport implements Transport {
           // the controller AND the channel, mirroring onDone.
           onError: (Object e, StackTrace st) async {
             if (cancelled) return;
-            controller.addError(DockerError.wrap(e), st);
+            controller.addError(mapSshError(e), st);
             await controller.close();
             await conn!.close();
           },
@@ -168,7 +170,7 @@ class SshTransport implements Transport {
         // onCancel closed the channel, or a late channel _openAndSend closed
         // unused - so swallow it like the body's post-cancel errors.
         if (cancelled) return;
-        controller.addError(DockerError.wrap(e), st);
+        controller.addError(mapSshError(e), st);
         await controller.close();
         await conn?.close();
       }
@@ -216,7 +218,7 @@ class SshTransport implements Transport {
       return SocketExecChannel(input: resp.body, onSend: open.add, onClose: open.close);
     } catch (e, st) {
       await conn?.close(); // never leak the dial-stdio channel on a failed upgrade
-      Error.throwWithStackTrace(DockerError.wrap(e), st);
+      Error.throwWithStackTrace(mapSshError(e), st);
     }
   }
 

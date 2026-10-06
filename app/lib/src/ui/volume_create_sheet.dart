@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'route_is_open.dart';
 import 'widgets/key_value_editor.dart';
 
 class VolumeCreateSheet extends ConsumerStatefulWidget {
@@ -35,7 +36,6 @@ class _VolumeCreateSheetState extends ConsumerState<VolumeCreateSheet> {
     final client = ref.read(dockerClientProvider);
     if (client == null) return;
     final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
     setState(() => _busy = true);
     try {
       await client.createVolume(
@@ -44,8 +44,9 @@ class _VolumeCreateSheetState extends ConsumerState<VolumeCreateSheet> {
         labels: _labels,
         driverOpts: _opts,
       );
+      if (!mounted) return;
       ref.invalidate(volumesProvider);
-      navigator.pop();
+      closeRoute(context);
       messenger.showSnackBar(const SnackBar(content: Text('Volume created')));
     } catch (e) {
       if (mounted) setState(() => _busy = false);

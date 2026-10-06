@@ -10,8 +10,9 @@ import 'package:docker_mobile/src/ui/image_detail_screen.dart';
 import 'package:docker_mobile/src/ui/widgets/error_view.dart';
 
 import '../support/fake_transport.dart';
+import '../support/held_transport.dart';
 
-FakeTransport imageFake() => FakeTransport()
+FakeTransport imageFake([FakeTransport? base]) => (base ?? FakeTransport())
   ..onGet('/images/sha256:abc/json', (_) => http.Response(
         '{"Id":"sha256:abc","RepoTags":["nginx:latest"],"Architecture":"amd64","Os":"linux","Size":100,"Created":"2026-01-02T03:04:05Z","Config":{"Env":[],"ExposedPorts":{"80/tcp":{}}}}',
         200,
@@ -68,6 +69,22 @@ void main() {
 
     expect(t.calls.where((c) => c.method == 'DELETE').map((c) => c.path), contains('/images/sha256:abc'));
     expect(find.text('open'), findsOneWidget); // popped back to the base route
+  });
+
+  testWidgets('a screen closed underneath a pending remove does not close the screen below', (tester) async {
+    final t = HeldTransport();
+    await _open(tester, imageFake(t));
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Remove'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(TextButton, 'Remove')); // dialog confirm; the delete is now in flight
+    await tester.pumpAndSettle();
+
+    popToFirstRoute(tester); // the screen is on its way out, and still mounted until its transition ends
+    t.release();
+    await tester.pumpAndSettle();
+
+    expect(t.calls.where((c) => c.method == 'DELETE'), hasLength(1)); // the remove did answer
+    expect(find.text('open'), findsOneWidget);
   });
 
   testWidgets('Tag dialog tags the image', (tester) async {

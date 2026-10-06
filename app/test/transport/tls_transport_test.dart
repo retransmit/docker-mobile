@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:docker_mobile/src/api/docker_error.dart';
 import 'package:docker_mobile/src/transport/timeouts.dart';
 import 'package:docker_mobile/src/transport/tls_transport.dart';
@@ -46,6 +47,54 @@ class _StreamingClient extends http.BaseClient {
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async =>
       http.StreamedResponse(body, 200, request: request);
+}
+
+/// A local server for one request over a real socket. It answers, with the
+/// headers of a response that never ends, only when the test calls [answer].
+class _HeldServer {
+  _HeldServer._(this._server);
+
+  final ServerSocket _server;
+  Socket? _socket;
+  final _requested = Completer<void>();
+  final _released = Completer<void>();
+
+  static Future<_HeldServer> start() async {
+    final held = _HeldServer._(await ServerSocket.bind(InternetAddress.loopbackIPv4, 0));
+    held._server.listen(held._serve);
+    return held;
+  }
+
+  void _serve(Socket socket) {
+    _socket = socket;
+    void gone([Object? _]) {
+      if (!_released.isCompleted) _released.complete();
+    }
+
+    socket.listen((_) {
+      if (!_requested.isCompleted) _requested.complete();
+    }, onDone: gone, onError: gone);
+    // A write to a connection the client has reset fails here.
+    socket.done.then(gone, onError: gone);
+  }
+
+  Uri get uri => Uri.parse('http://${_server.address.host}:${_server.port}');
+
+  /// Completes once the request has arrived.
+  Future<void> get requested => _requested.future;
+
+  /// Sends the response headers and the first chunk of the endless body.
+  void answer() =>
+      _socket!.add(ascii.encode('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n'));
+
+  /// Whether the client closes the connection within [limit].
+  Future<bool> releasedWithin(Duration limit) =>
+      _released.future.then((_) => true).timeout(limit, onTimeout: () => false);
+
+  Future<void> close() async {
+    _socket?.destroy();
+    await _server.close();
+  }
 }
 
 void main() {
@@ -189,6 +238,45 @@ void main() {
       expect(err, isNull);
       async.elapse(const Duration(seconds: 2));
       expect(err, isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout));
+    });
+  });
+
+  group('over a real connection', () {
+    late _HeldServer server;
+    late TlsTransport t;
+
+    /// A transport to a fresh [_HeldServer]; both are closed after the test.
+    Future<void> connect({Duration streamHeaderTimeout = kStreamHeaderTimeout}) async {
+      server = await _HeldServer.start();
+      t = TlsTransport(baseUri: server.uri, client: IOClient(), streamHeaderTimeout: streamHeaderTimeout);
+      addTearDown(() async {
+        await t.close();
+        await server.close();
+      });
+    }
+
+    test('a stream cancelled before its headers arrive lets go of the connection', () async {
+      await connect();
+      final sub = t.stream('/containers/x/logs').listen((_) {});
+      await server.requested; // the request is out, its response headers are not
+      await sub.cancel();
+      server.answer();
+
+      expect(await server.releasedWithin(const Duration(seconds: 3)), isTrue,
+          reason: 'a response nobody reads must not keep its connection');
+    });
+
+    test('headers that arrive after the header timeout let go of the connection', () async {
+      await connect(streamHeaderTimeout: const Duration(milliseconds: 200));
+      await expectLater(
+        t.stream('/containers/x/logs'),
+        emitsError(isA<DockerError>().having((e) => e.kind, 'kind', DockerErrorKind.timeout)),
+      );
+      await server.requested;
+      server.answer(); // too late: the stream has already failed
+
+      expect(await server.releasedWithin(const Duration(seconds: 3)), isTrue,
+          reason: 'a response nobody reads must not keep its connection');
     });
   });
 }

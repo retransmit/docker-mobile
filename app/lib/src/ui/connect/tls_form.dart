@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../connect/connection_launcher.dart';
-import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
 import '../widgets/app_text_field.dart';
+import 'profile_form_save.dart';
 
 class TlsForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -14,7 +13,7 @@ class TlsForm extends ConsumerStatefulWidget {
   ConsumerState<TlsForm> createState() => _TlsFormState();
 }
 
-class _TlsFormState extends ConsumerState<TlsForm> {
+class _TlsFormState extends ConsumerState<TlsForm> with ProfileFormSave<TlsForm> {
   final _name = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController(text: '2376');
@@ -52,7 +51,11 @@ class _TlsFormState extends ConsumerState<TlsForm> {
 
   void _snack(String m) => ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
 
-  ConnectionProfile? _build() {
+  @override
+  bool get isEditing => widget.editing != null;
+
+  @override
+  ConnectionProfile? buildProfile() {
     final name = _name.text.trim();
     final host = _host.text.trim();
     final port = int.tryParse(_port.text.trim());
@@ -77,28 +80,6 @@ class _TlsFormState extends ConsumerState<TlsForm> {
     );
   }
 
-  Future<void> _persist(ConnectionProfile p) async {
-    final store = ref.read(profileStoreProvider);
-    widget.editing == null ? await store.add(p) : await store.update(p);
-    ref.invalidate(profilesProvider);
-  }
-
-  Future<void> _save() async {
-    final p = _build();
-    if (p == null) return;
-    final navigator = Navigator.of(context);
-    await _persist(p);
-    navigator.pop();
-  }
-
-  Future<void> _saveAndConnect() async {
-    final p = _build();
-    if (p == null) return;
-    await _persist(p);
-    if (!mounted) return;
-    await launchConnection(context, ref, p);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -113,9 +94,9 @@ class _TlsFormState extends ConsumerState<TlsForm> {
         SwitchListTile(title: const Text('Allow insecure (skip server verification)'), value: _insecure, onChanged: (v) => setState(() => _insecure = v)),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: OutlinedButton(onPressed: _save, child: const Text('Save'))),
+          Expanded(child: OutlinedButton(onPressed: save, child: const Text('Save'))),
           const SizedBox(width: 8),
-          Expanded(child: FilledButton(onPressed: _saveAndConnect, child: const Text('Save & Connect'))),
+          Expanded(child: FilledButton(onPressed: saveAndConnect, child: const Text('Save & Connect'))),
         ]),
       ],
     );

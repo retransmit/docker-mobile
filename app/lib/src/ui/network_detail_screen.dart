@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import 'route_is_open.dart';
 import 'widgets/error_view.dart';
 
 class NetworkDetailScreen extends ConsumerWidget {
@@ -45,7 +46,6 @@ class NetworkDetailScreen extends ConsumerWidget {
               ElevatedButton(
                 onPressed: () async {
                   final messenger = ScaffoldMessenger.of(context);
-                  final navigator = Navigator.of(context);
                   final ok = await showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(
@@ -60,8 +60,9 @@ class NetworkDetailScreen extends ConsumerWidget {
                   if (ok != true || client == null) return;
                   try {
                     await client.removeNetwork(networkId);
+                    if (!context.mounted) return;
                     ref.invalidate(networksProvider);
-                    navigator.pop();
+                    closeRoute(context);
                     messenger.showSnackBar(const SnackBar(content: Text('Removed')));
                   } catch (e) {
                     messenger.showSnackBar(SnackBar(content: Text('Failed: $e')));

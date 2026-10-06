@@ -20,3 +20,15 @@ String? rfc3339ToUnixNanos(String ts) {
   frac = frac.length > 9 ? frac.substring(0, 9) : frac.padRight(9, '0');
   return '$secs.$frac';
 }
+
+/// An RFC3339(Nano) timestamp as epoch nanoseconds (fits in 64 bits until
+/// the year 2262), keeping all nine fractional digits. Null if unparsable.
+int? rfc3339ToEpochNanos(String ts) {
+  final s = rfc3339ToUnixNanos(ts);
+  if (s == null) return null;
+  final dot = s.indexOf('.');
+  final secs = int.tryParse(s.substring(0, dot));
+  final nanos = int.tryParse(s.substring(dot + 1));
+  if (secs == null || nanos == null) return null;
+  return secs * 1000000000 + nanos;
+}

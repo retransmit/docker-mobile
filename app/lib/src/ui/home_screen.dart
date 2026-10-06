@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/providers.dart';
 import 'containers_screen.dart';
 import 'images_screen.dart';
 import 'networks_screen.dart';
@@ -19,11 +20,33 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   int _index = 0;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showWarning());
+  }
+
+  void _showWarning() {
+    if (!mounted) return;
+    final warning = ref.read(sessionProvider).warning;
+    if (warning == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(warning)));
+    ref.read(sessionProvider.notifier).acknowledgeWarning();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: IndexedStack(
         index: _index,
-        children: const [ContainersScreen(), ImagesScreen(), NetworksScreen(), VolumesScreen(), SystemScreen()],
+        children: [
+          const ContainersScreen(),
+          const ImagesScreen(),
+          const NetworksScreen(),
+          const VolumesScreen(),
+          // Every tab stays mounted. The dashboard's disk-usage call can take
+          // minutes, so that one is fetched only while its tab shows.
+          SystemScreen(active: _index == 4),
+        ],
       ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,

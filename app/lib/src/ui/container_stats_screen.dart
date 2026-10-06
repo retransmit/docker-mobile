@@ -4,6 +4,8 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../session/session_state.dart';
+import '../state/providers.dart';
 import '../state/stats_notifier.dart';
 import 'widgets/error_view.dart';
 import 'widgets/resource_widgets.dart';
@@ -44,15 +46,22 @@ class ContainerStatsScreen extends ConsumerWidget {
       return ErrorView(
         key: const ValueKey('error'),
         error: s.error ?? 'Stats stream failed',
-        onRetry: () => ref.invalidate(statsProvider(containerId)),
+        onRetry: () => ref.read(statsProvider(containerId).notifier).retry(),
       );
     }
     final latest = s.latest;
     if (latest == null) return const SkeletonCards(key: ValueKey('loading'));
+    // The stream waits for the session, so it still reports reconnecting once the session has given up.
+    final sessionFailed = ref.watch(sessionProvider.select((session) => session.status == SessionStatus.failed));
     return ListView(
       key: const ValueKey('data'),
       padding: const EdgeInsets.all(16),
       children: [
+        if (s.status == StatsStatus.reconnecting)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(sessionFailed ? 'Connection lost' : 'Reconnecting...'),
+          ),
         _chartCard(context, 'CPU', '${latest.cpuPercent.toStringAsFixed(1)} %', null, s.cpuHistory, _cpuMaxY(s.cpuHistory)),
         const SizedBox(height: 12),
         _chartCard(

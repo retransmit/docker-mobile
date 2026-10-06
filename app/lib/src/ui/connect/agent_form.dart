@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../connect/connection_launcher.dart';
-import '../../state/providers.dart';
 import '../../storage/credential_store.dart';
 import '../../storage/profile_store.dart';
 import '../widgets/app_text_field.dart';
+import 'profile_form_save.dart';
 
 class AgentForm extends ConsumerStatefulWidget {
   final ConnectionProfile? editing;
@@ -14,7 +13,7 @@ class AgentForm extends ConsumerStatefulWidget {
   ConsumerState<AgentForm> createState() => _AgentFormState();
 }
 
-class _AgentFormState extends ConsumerState<AgentForm> {
+class _AgentFormState extends ConsumerState<AgentForm> with ProfileFormSave<AgentForm> {
   final _name = TextEditingController();
   final _host = TextEditingController();
   final _port = TextEditingController(text: '8080');
@@ -44,7 +43,11 @@ class _AgentFormState extends ConsumerState<AgentForm> {
     super.dispose();
   }
 
-  ConnectionProfile? _build() {
+  @override
+  bool get isEditing => widget.editing != null;
+
+  @override
+  ConnectionProfile? buildProfile() {
     final name = _name.text.trim();
     final host = _host.text.trim();
     final port = int.tryParse(_port.text.trim());
@@ -61,28 +64,6 @@ class _AgentFormState extends ConsumerState<AgentForm> {
     );
   }
 
-  Future<void> _persist(ConnectionProfile p) async {
-    final store = ref.read(profileStoreProvider);
-    widget.editing == null ? await store.add(p) : await store.update(p);
-    ref.invalidate(profilesProvider);
-  }
-
-  Future<void> _save() async {
-    final p = _build();
-    if (p == null) return;
-    final navigator = Navigator.of(context);
-    await _persist(p);
-    navigator.pop();
-  }
-
-  Future<void> _saveAndConnect() async {
-    final p = _build();
-    if (p == null) return;
-    await _persist(p);
-    if (!mounted) return;
-    await launchConnection(context, ref, p);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -90,13 +71,13 @@ class _AgentFormState extends ConsumerState<AgentForm> {
         AppTextField(controller: _name, label: 'Name', icon: Icons.label),
         AppTextField(controller: _host, label: 'Host / IP', icon: Icons.dns),
         AppTextField(controller: _port, label: 'Port', icon: Icons.numbers, keyboardType: TextInputType.number),
-        AppTextField(controller: _token, label: 'Token', icon: Icons.key, obscure: true, last: true, onSubmit: _saveAndConnect),
+        AppTextField(controller: _token, label: 'Token', icon: Icons.key, obscure: true, last: true, onSubmit: saveAndConnect),
         SwitchListTile(title: const Text('Use TLS (https)'), value: _useTls, onChanged: (v) => setState(() => _useTls = v)),
         const SizedBox(height: 16),
         Row(children: [
-          Expanded(child: OutlinedButton(onPressed: _save, child: const Text('Save'))),
+          Expanded(child: OutlinedButton(onPressed: save, child: const Text('Save'))),
           const SizedBox(width: 8),
-          Expanded(child: FilledButton(onPressed: _saveAndConnect, child: const Text('Save & Connect'))),
+          Expanded(child: FilledButton(onPressed: saveAndConnect, child: const Text('Save & Connect'))),
         ]),
       ],
     );

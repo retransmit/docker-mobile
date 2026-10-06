@@ -4,7 +4,9 @@ import 'package:share_plus/share_plus.dart';
 
 import '../api/models/log_line.dart';
 import '../api/stdcopy.dart';
+import '../session/session_state.dart';
 import '../state/logs_notifier.dart';
+import '../state/providers.dart';
 
 class LogsScreen extends ConsumerWidget {
   final String containerId;
@@ -17,6 +19,11 @@ class LogsScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: Text(containerName)),
       body: inspect.when(
+        // The inspect only tells the TTY flag. Once the body is up, a reload or a failed refetch
+        // must not take the log buffer away; a container that is gone shows in the stream's own
+        // error banner.
+        skipLoadingOnReload: true,
+        skipError: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => _ErrorBanner(
           message: '$e',
@@ -77,6 +84,8 @@ class _LogsBodyState extends ConsumerState<_LogsBody> {
     final state = ref.watch(logsProvider(key));
     final notifier = ref.read(logsProvider(key).notifier);
     final lines = state.visibleLines;
+    // The stream waits for the session, so it still reports reconnecting once the session has given up.
+    final sessionFailed = ref.watch(sessionProvider.select((s) => s.status == SessionStatus.failed));
 
     // Keep pinned to newest while following and already at the bottom.
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -100,6 +109,18 @@ class _LogsBodyState extends ConsumerState<_LogsBody> {
             ),
             if (state.status == LogsStatus.error)
               _ErrorBanner(message: state.error ?? 'stream error', onRetry: notifier.retry),
+            if (state.status == LogsStatus.reconnecting)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                child: Row(children: [
+                  if (sessionFailed)
+                    const Icon(Icons.cloud_off, size: 16)
+                  else
+                    const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                  const SizedBox(width: 8),
+                  Text(sessionFailed ? 'Connection lost' : 'Reconnecting stream...'),
+                ]),
+              ),
             Expanded(
               child: ListView.builder(
                 controller: _scroll,
@@ -211,15 +232,16 @@ class _Controls extends StatelessWidget {
             icon: Icon(state.timestamps ? Icons.schedule : Icons.schedule_outlined),
             onPressed: () => onTimestamps(!state.timestamps),
           ),
-          PopupMenuButton<int?>(
+          PopupMenuButton<int>(
             tooltip: 'Tail',
             icon: const Icon(Icons.format_list_numbered),
-            onSelected: onTail,
+            // 0 stands for "all": a null value would read as a dismissed menu.
+            onSelected: (v) => onTail(v == 0 ? null : v),
             itemBuilder: (_) => const [
               PopupMenuItem(value: 100, child: Text('Tail 100')),
               PopupMenuItem(value: 500, child: Text('Tail 500')),
               PopupMenuItem(value: 1000, child: Text('Tail 1000')),
-              PopupMenuItem(value: null, child: Text('All')),
+              PopupMenuItem(value: 0, child: Text('All')),
             ],
           ),
           IconButton(tooltip: 'Share', icon: const Icon(Icons.ios_share), onPressed: onShare),
