@@ -3,9 +3,12 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,9 +17,23 @@ import (
 	"github.com/retransmit/docker-mobile/agent/internal/throttle"
 )
 
-type clock struct{ t time.Time }
+// clock is a time source the tests set by hand. Goroutines may share it.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
-func (c *clock) now() time.Time { return c.t }
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
 
 type fixture struct {
 	auth    *Authenticator
@@ -66,7 +83,26 @@ func (f *fixture) do(bearer, remote string) *httptest.ResponseRecorder {
 	return rec
 }
 
+// counted reports how many failures the limiter holds for the address of
+// remote. It finds out by adding failures until the address is blocked, so it
+// is the last thing a test does with that address.
+func (f *fixture) counted(remote string) int {
+	key := throttle.Key(remote)
+	added := 0
+	for added <= throttle.Threshold {
+		if _, blocked := f.auth.Limiter.Blocked(key); blocked {
+			break
+		}
+		f.auth.Limiter.Fail(key)
+		added++
+	}
+	return throttle.Threshold - added
+}
+
 const legacy = "a-shared-token-of-enough-length"
+
+// noDevice has the shape of a device token and belongs to nobody.
+var noDevice = "dm1.ffffffff." + strings.Repeat("A", 43)
 
 func TestADeviceTokenIdentifiesItsDevice(t *testing.T) {
 	f := newFixture(t, "")
@@ -76,6 +112,9 @@ func TestADeviceTokenIdentifiesItsDevice(t *testing.T) {
 	}
 	if len(f.seen) != 1 || f.seen[0].ID != dev.ID || f.seen[0].Role != state.RoleReadOnly {
 		t.Fatalf("caller = %+v", f.seen)
+	}
+	if f.seen[0].TokenHash != "" {
+		t.Fatal("the hash of the token travelled with the request")
 	}
 }
 
@@ -93,6 +132,7 @@ func TestTheSharedTokenIsAFullDeviceCalledEnvToken(t *testing.T) {
 func TestBadCredentialsAreRefusedWithAJSONMessage(t *testing.T) {
 	f := newFixture(t, legacy)
 	_, token, _ := f.devices.Add("phone", state.RoleFull)
+	n := 0
 	for name, bearer := range map[string]string{
 		"nothing":            "",
 		"empty bearer":       "Bearer ",
@@ -100,10 +140,13 @@ func TestBadCredentialsAreRefusedWithAJSONMessage(t *testing.T) {
 		"wrong scheme":       "Basic " + legacy,
 		"no scheme":          legacy,
 		"damaged device":     "Bearer " + token + "x",
-		"unknown device":     "Bearer dm1.ffffffff.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		"unknown device":     "Bearer " + noDevice,
 		"lower case scheme":  "bearer " + legacy,
 	} {
-		rec := f.do(bearer, "")
+		// Each case has its own address, so however many cases there are, none
+		// of them is answered by the throttle.
+		n++
+		rec := f.do(bearer, fmt.Sprintf("198.51.100.%d:1000", n))
 		if rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: code = %d, want 401", name, rec.Code)
 		}
@@ -143,6 +186,10 @@ func TestTenFailuresBlockTheAddressButNotItsPairedDevices(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != "60" {
 		t.Fatalf("Retry-After = %q, want 60", got)
 	}
+	// So is a token with the shape of a device token that belongs to nobody.
+	if rec := f.do("Bearer "+noDevice, nat); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("unknown device: code = %d, want 429", rec.Code)
+	}
 	// A paired device behind the same address still gets in.
 	if rec := f.do("Bearer "+token, nat); rec.Code != http.StatusOK {
 		t.Fatalf("paired device: code = %d, want 200", rec.Code)
@@ -156,9 +203,61 @@ func TestTenFailuresBlockTheAddressButNotItsPairedDevices(t *testing.T) {
 		t.Fatalf("%d failures reported, want %d", len(f.failed), throttle.Threshold)
 	}
 	// When the block ends the shared token works again.
-	f.clock.t = f.clock.t.Add(time.Minute)
+	f.clock.advance(time.Minute)
 	if rec := f.do("Bearer "+legacy, nat); rec.Code != http.StatusOK {
 		t.Fatalf("after the block: code = %d, want 200", rec.Code)
+	}
+}
+
+func TestEveryKindOfFailureIsCountedOnce(t *testing.T) {
+	f := newFixture(t, legacy)
+	known, _, _ := f.devices.Add("phone", state.RoleFull)
+	gone, goneToken, _ := f.devices.Add("old phone", state.RoleFull)
+	if _, ok, err := f.devices.Remove(gone.ID); !ok || err != nil {
+		t.Fatalf("remove: ok = %v, err = %v", ok, err)
+	}
+	cases := []struct{ name, bearer string }{
+		{"no header", ""},
+		{"a wrong scheme", "Basic " + legacy},
+		{"a malformed device token", "Bearer dm1.no-second-dot"},
+		{"an unknown device", "Bearer " + noDevice},
+		{"a wrong secret for a known device", "Bearer dm1." + known.ID + "." + strings.Repeat("A", 43)},
+		{"a removed device", "Bearer " + goneToken},
+	}
+	for i, c := range cases {
+		remote := fmt.Sprintf("198.51.100.%d:1000", i+1)
+		before := len(f.failed)
+		if rec := f.do(c.bearer, remote); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s: code = %d, want 401", c.name, rec.Code)
+		}
+		if got := f.failed[before:]; len(got) != 1 || got[0] != remote {
+			t.Errorf("%s: failures reported = %q, want one from %s", c.name, got, remote)
+		}
+		if got := f.counted(remote); got != 1 {
+			t.Errorf("%s: %d failures counted, want 1", c.name, got)
+		}
+	}
+	if len(f.seen) != 0 {
+		t.Fatalf("the handler ran for %d refused requests", len(f.seen))
+	}
+}
+
+func TestASuccessIsNeverCounted(t *testing.T) {
+	f := newFixture(t, legacy)
+	_, token, _ := f.devices.Add("phone", state.RoleFull)
+	for i, bearer := range []string{"Bearer " + token, "Bearer " + legacy} {
+		remote := fmt.Sprintf("198.51.100.%d:1000", i+1)
+		for n := 0; n < 3; n++ {
+			if rec := f.do(bearer, remote); rec.Code != http.StatusOK {
+				t.Fatalf("%s: code = %d, want 200", remote, rec.Code)
+			}
+		}
+		if got := f.counted(remote); got != 0 {
+			t.Errorf("%s: %d failures counted, want 0", remote, got)
+		}
+	}
+	if len(f.failed) != 0 {
+		t.Fatalf("%d failures reported, want 0", len(f.failed))
 	}
 }
 
@@ -175,7 +274,11 @@ func TestClosingADeviceEndsItsOpenRequest(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/events", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	go h.ServeHTTP(httptest.NewRecorder(), req)
-	<-started
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request did not start")
+	}
 	if f.auth.Conns.Open(dev.ID) != 1 {
 		t.Fatalf("open = %d, want 1", f.auth.Conns.Open(dev.ID))
 	}
@@ -193,10 +296,154 @@ func TestClosingADeviceEndsItsOpenRequest(t *testing.T) {
 func TestOnCallerLearnsWhoARequestBelongsTo(t *testing.T) {
 	f := newFixture(t, "")
 	dev, token, _ := f.devices.Add("phone", state.RoleFull)
-	var told string
-	f.auth.OnCaller = func(_ *http.Request, d state.Device) { told = d.ID }
+	var told state.Device
+	f.auth.OnCaller = func(_ *http.Request, d state.Device) { told = d }
 	f.do("Bearer "+token, "")
-	if told != dev.ID {
-		t.Fatalf("OnCaller got %q, want %q", told, dev.ID)
+	if told.ID != dev.ID {
+		t.Fatalf("OnCaller got %q, want %q", told.ID, dev.ID)
+	}
+	if told.TokenHash != "" {
+		t.Fatal("OnCaller got the hash of the token")
+	}
+}
+
+// removingContext is a request context that runs remove the first time it is
+// asked for Done. The registry asks while it tracks a request, which is after
+// the token was accepted and before the request is registered.
+type removingContext struct {
+	context.Context
+	once   sync.Once
+	remove func()
+}
+
+func (c *removingContext) Done() <-chan struct{} {
+	c.once.Do(c.remove)
+	return c.Context.Done()
+}
+
+func TestADeviceRemovedBeforeItsRequestIsTrackedIsRefused(t *testing.T) {
+	f := newFixture(t, "")
+	dev, token, _ := f.devices.Add("phone", state.RoleFull)
+	told := 0
+	f.auth.OnCaller = func(*http.Request, state.Device) { told++ }
+	removed := false
+	ctx := &removingContext{Context: context.Background(), remove: func() {
+		if _, ok, err := f.devices.Remove(dev.ID); !ok || err != nil {
+			t.Errorf("remove: ok = %v, err = %v", ok, err)
+		}
+		f.auth.Conns.CloseDevice(dev.ID)
+		removed = true
+	}}
+	const remote = "203.0.113.7:40000"
+	ran := false
+	h := f.auth.Require(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { ran = true }))
+	req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = remote
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !removed {
+		t.Fatal("the device was not removed while its request was tracked")
+	}
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("code = %d, want 401", rec.Code)
+	}
+	if ran {
+		t.Error("the handler ran for a removed device")
+	}
+	if told != 0 {
+		t.Error("OnCaller was told of a removed device")
+	}
+	if n := f.auth.Conns.Open(dev.ID); n != 0 {
+		t.Errorf("open = %d, want 0", n)
+	}
+	// It is a failed credential like any other.
+	if len(f.failed) != 1 || f.failed[0] != remote {
+		t.Errorf("failures reported = %q, want one from %s", f.failed, remote)
+	}
+	if got := f.counted(remote); got != 1 {
+		t.Errorf("%d failures counted, want 1", got)
+	}
+}
+
+func TestADeviceRemovedAfterItsRequestIsTrackedHasItEnded(t *testing.T) {
+	f := newFixture(t, "")
+	_, token, _ := f.devices.Add("phone", state.RoleFull)
+	// OnCaller runs when the device was found again after tracking, so this
+	// removal lands behind that lookup and its close finds the request.
+	f.auth.OnCaller = func(_ *http.Request, d state.Device) {
+		if _, ok, err := f.devices.Remove(d.ID); !ok || err != nil {
+			t.Errorf("remove: ok = %v, err = %v", ok, err)
+		}
+		if n := f.auth.Conns.CloseDevice(d.ID); n != 1 {
+			t.Errorf("the close ended %d requests, want 1", n)
+		}
+	}
+	ran := false
+	var seen error
+	h := f.auth.Require(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		ran, seen = true, r.Context().Err()
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/events", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code == http.StatusServiceUnavailable {
+		t.Error("code = 503 although the agent is not shutting down")
+	}
+	if !ran || seen != context.Canceled {
+		t.Errorf("handler ran = %v with context error %v, want it run with an ended context", ran, seen)
+	}
+}
+
+func TestAfterCloseAllARequestIsRefusedAsShuttingDown(t *testing.T) {
+	f := newFixture(t, legacy)
+	_, token, _ := f.devices.Add("phone", state.RoleFull)
+	f.auth.Conns.CloseAll()
+	for name, bearer := range map[string]string{
+		"device":       "Bearer " + token,
+		"shared token": "Bearer " + legacy,
+	} {
+		rec := f.do(bearer, "")
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: code = %d, want 503", name, rec.Code)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["message"] != "The agent is shutting down" {
+			t.Errorf("%s: body = %q", name, rec.Body.String())
+		}
+	}
+	if len(f.seen) != 0 {
+		t.Errorf("the handler ran for %d requests after CloseAll", len(f.seen))
+	}
+	if len(f.failed) != 0 {
+		t.Errorf("%d failures reported, want 0", len(f.failed))
+	}
+}
+
+func TestAClientThatWentAwayIsNotAnsweredAsShuttingDown(t *testing.T) {
+	f := newFixture(t, legacy)
+	_, token, _ := f.devices.Add("phone", state.RoleFull)
+	for name, bearer := range map[string]string{
+		"device":       "Bearer " + token,
+		"shared token": "Bearer " + legacy,
+	} {
+		gone, cancel := context.WithCancel(context.Background())
+		cancel()
+		ran := false
+		h := f.auth.Require(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			ran = r.Context().Err() == context.Canceled
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/events", nil).WithContext(gone)
+		req.Header.Set("Authorization", bearer)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("%s: code = 503 although the agent is not shutting down", name)
+		}
+		if !ran {
+			t.Errorf("%s: the handler did not run with the ended context", name)
+		}
 	}
 }

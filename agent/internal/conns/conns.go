@@ -51,7 +51,11 @@ func (r *Registry) Track(parent context.Context, deviceID string) (ctx context.C
 	}
 }
 
-// CloseDevice ends every open request of one device and reports how many.
+// CloseDevice ends every open request of one device and reports how many. It
+// ends only what is tracked at that moment, so the order matters: unpair the
+// device first and call CloseDevice after that, and let every request check,
+// once it is tracked, that its device is still paired. A request is then
+// either ended here or fails that check.
 func (r *Registry) CloseDevice(deviceID string) int {
 	r.mu.Lock()
 	set := r.open[deviceID]
