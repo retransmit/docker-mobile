@@ -25,6 +25,29 @@ AGENT_DATA=./.agent-data AGENT_TOKEN=replace-me-with-32-or-more-characters go ru
 ```
 That listens on `:8080`. `go run ./cmd/agent help` lists every command and setting.
 
+Pair a phone with the running agent, then list or remove paired phones:
+```
+AGENT_DATA=./.agent-data go run ./cmd/agent pair
+AGENT_DATA=./.agent-data go run ./cmd/agent devices
+AGENT_DATA=./.agent-data go run ./cmd/agent revoke <id>
+```
+
+`pair --read-only` pairs a phone that may look but not change anything. It
+can still see everything: lists, logs, and the full inspect output, which
+includes every container's environment variables. Two consequences when
+the agent itself runs in a container:
+
+- Do not give the agent `AGENT_TOKEN` through its container's environment.
+  A read-only phone could read it there, and that token gives full
+  control. Pair phones instead.
+- Run `pair` inside the running agent's container, never as the main
+  process of a container of its own:
+  ```
+  docker exec -it <agent container> docker-mobile-agent pair
+  ```
+  A container's main process writes to that container's log, and the
+  pairing code would be readable there for as long as it is valid.
+
 ## Run the app (dev)
 ```
 cd app

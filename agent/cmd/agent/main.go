@@ -17,6 +17,10 @@ const usage = `docker-mobile-agent - lets the docker-mobile app control this Doc
 
 Usage:
   docker-mobile-agent [serve] [--insecure-http]   run the agent (default)
+  docker-mobile-agent pair [--read-only] [--name NAME] [--host ADDR] [--invert] [--no-qr]
+                                                  pair a phone with the running agent
+  docker-mobile-agent devices                     list paired phones
+  docker-mobile-agent revoke ID                   remove a paired phone
   docker-mobile-agent fingerprint                 print the certificate fingerprint
   docker-mobile-agent healthcheck [--insecure-http]
                                                   exit 0 when the agent answers
@@ -46,6 +50,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	switch cmd {
 	case "serve":
 		err = cmdServe(ctx, rest, getenv, stderr)
+	case "pair":
+		err = cmdPair(ctx, rest, getenv, stdout)
+	case "devices":
+		err = cmdDevices(ctx, getenv, stdout)
+	case "revoke":
+		err = cmdRevoke(ctx, rest, getenv, stdout)
 	case "fingerprint":
 		err = cmdFingerprint(getenv, stdout)
 	case "healthcheck":
