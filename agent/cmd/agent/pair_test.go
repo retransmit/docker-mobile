@@ -97,7 +97,8 @@ func (p *phone) pair(code, name string) (status int, err error) {
 //
 // The phone goes where it was sent and takes what it asked for, no more: it
 // follows no redirect, and it reads no answer that is larger than a pairing
-// answer can be.
+// answer can be. And it shows nothing it holds: a token from an earlier
+// pairing is in neither request of the attempt.
 func (p *phone) pairContext(ctx context.Context, code, name string) (status int, err error) {
 	canonical, ok := pairing.Normalize(code)
 	if !ok {
@@ -175,13 +176,19 @@ func (p *phone) pairContext(ctx context.Context, code, name string) (status int,
 	return http.StatusOK, nil
 }
 
-// ask sends one request of a pairing attempt. It is the phone's ordinary
-// request but for one thing: it follows no redirect, and hands back the
-// answer that asks for one as it is. Where a phone takes its proof is for
-// its owner to say, who typed or scanned the address, and not for whoever
-// answers there.
+// ask sends one request of a pairing attempt. It differs from the phone's
+// ordinary request in two things.
+//
+// It follows no redirect, and hands back the answer that asks for one as it
+// is. Where a phone takes its proof is for its owner to say, who typed or
+// scanned the address, and not for whoever answers there.
+//
+// And it carries no token, also when the phone holds one from an earlier
+// pairing. A token is for the agent that issued it, and who answers a pairing
+// attempt is not known to be that agent: when the code was typed, it may be
+// a relay.
 func (p *phone) ask(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
-	req, err := p.request(ctx, method, path, body)
+	req, err := http.NewRequestWithContext(ctx, method, p.scheme+"://"+p.addr+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -733,6 +740,48 @@ func TestAPhoneFollowsNoRedirectWhilePairing(t *testing.T) {
 		if got := asked.String(); got != c.asked {
 			t.Errorf("%s was answered with a redirect, and the phone asked:\n%swant only:\n%s", c.name, got, c.asked)
 		}
+	}
+}
+
+// earlierToken is what a phone holds that has been paired before, with this
+// server or with another. It has the form of a device token, and it is not
+// the token that a pairing in these tests hands out.
+var earlierToken = "dm1.feedface." + strings.Repeat("B", 43)
+
+func TestAPhoneSendsNoTokenWhilePairing(t *testing.T) {
+	// The server holds the code and answers as an agent does. It notes what
+	// every request brings in its Authorization header.
+	code := someCode(t)
+	cert := strangerCert(t)
+	right := answerPairing(fingerprintOf(t, cert), func(phoneNonce, fingerprint []byte) reply {
+		return rightReply(code, phoneNonce, fingerprint)
+	})
+	var asked syncBuf
+	noting := func(handler http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(&asked, "%s %s %q\n", r.Method, r.URL.Path, r.Header.Values("Authorization"))
+			handler(w, r)
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", noting(healthy))
+	mux.HandleFunc("POST /agent/v1/pair", noting(right))
+	p := newPhone(t, "https", serveTLS(t, cert, mux))
+	p.token = earlierToken
+
+	if status, err := p.pair(code, "Pixel 8"); err != nil || status != http.StatusOK {
+		t.Fatalf("pairing: %d, %v", status, err)
+	}
+	whilePairing := "GET /healthz []\nPOST /agent/v1/pair []\n"
+	if got := asked.String(); got != whilePairing {
+		t.Fatalf("while it paired the phone sent:\n%swant, with no token in either request:\n%s", got, whilePairing)
+	}
+	// The server does note a token that is sent: the phone's next request is
+	// an ordinary one and comes with the token the pairing gave it.
+	p.status("GET", "/healthz")
+	afterwards := whilePairing + "GET /healthz [\"Bearer " + madeUpToken + "\"]\n"
+	if got := asked.String(); got != afterwards {
+		t.Fatalf("with its ordinary request the phone has sent:\n%swant:\n%s", got, afterwards)
 	}
 }
 

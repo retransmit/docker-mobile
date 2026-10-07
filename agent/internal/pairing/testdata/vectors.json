@@ -1,5 +1,5 @@
 {
-  "note": "Shared with the app. key: PBKDF2-HMAC-SHA256(password = the 12 ASCII bytes of the code, salt = 'docker-mobile pair v1' 00 phoneNonce, rounds = 100000, length = 32 bytes); the salt is the context string, one zero byte, then the phone nonce, 54 bytes in all, so both proofs of one attempt have the same key and no other attempt has it. proofs: HMAC-SHA256 keyed with that key over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) as one byte, fingerprint, phoneNonce, [agentNonce]. typed (in proofs): one way a person might enter that code; it is normalized first, and what is stretched is the result, code. normalization: what a typed code becomes (null = rejected). links: the link the agent shows for the six fields; an empty host, port, fingerprint, scheme or name is left out, and values are form-encoded (a space is '+', a reserved or non-ASCII character is %XX for each UTF-8 byte).",
+  "note": "Shared with the app. key: PBKDF2-HMAC-SHA256(password = the 12 ASCII bytes of the code, salt = 'docker-mobile pair v1' 00 phoneNonce, rounds = 100000, length = 32 bytes); the salt is the context string, one zero byte, then the phone nonce, 54 bytes in all, so both proofs of one attempt have the same key and no other attempt has it. proofs: HMAC-SHA256 keyed with that key over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) as one byte, fingerprint, phoneNonce, [agentNonce]. typed (in proofs): one way a person might enter that code; it is normalized first, and what is stretched is the result, code. normalization: what a typed code becomes (null = rejected). links: the link the agent shows for the six fields; an empty host, port, fingerprint, scheme or name is left out, and values are form-encoded (a space is '+', a reserved or non-ASCII character is %XX for each UTF-8 byte). A link has neither host nor port when the agent knows no address to advertise; the app then asks for the address. A host that is an IPv6 address is the address alone, without brackets, each colon encoded as %3A, and the port stays a field of its own.",
   "proofs": [
     {
       "name": "pinned certificate",
@@ -173,6 +173,24 @@
       "code": "K7QM2XPA9TRC",
       "name": "",
       "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&h=10.0.0.7&p=8443&v=1"
+    },
+    {
+      "host": "",
+      "port": "",
+      "fingerprint": "OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI",
+      "scheme": "",
+      "code": "K7QM2XPA9TRC",
+      "name": "home lab",
+      "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI&n=home+lab&v=1"
+    },
+    {
+      "host": "fd12:3456:789a:1::20",
+      "port": "8443",
+      "fingerprint": "A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk",
+      "scheme": "",
+      "code": "0123456789AB",
+      "name": "nas",
+      "link": "dockermobile://pair?c=0123456789AB&f=A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk&h=fd12%3A3456%3A789a%3A1%3A%3A20&n=nas&p=8443&v=1"
     }
   ]
 }
