@@ -1,0 +1,9 @@
+//go:build windows
+
+package state
+
+import "io/fs"
+
+// checkOwner accepts every folder: Windows has no user id that the owner of
+// a folder could be compared with.
+func checkOwner(string, fs.FileInfo) error { return nil }

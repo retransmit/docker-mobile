@@ -66,6 +66,211 @@ func TestOpenRejectsAnEmptyPathAndAFile(t *testing.T) {
 	}
 }
 
+// folderWith makes a folder with mode 0755 that holds a file for every name
+// and returns its path. A name that ends in a slash becomes a folder. The
+// folder says it was last written to long ago: whatever is written into it
+// afterwards moves that time, also a file that is made there and removed
+// again.
+func folderWith(t *testing.T, names ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "data")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Whatever the umask made of it.
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		var err error
+		if dir, isDir := strings.CutSuffix(name, "/"); isDir {
+			err = os.Mkdir(filepath.Join(path, dir), 0o700)
+		} else {
+			err = os.WriteFile(filepath.Join(path, name), []byte(name), 0o600)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	longAgo := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
+	if err := os.Chtimes(path, longAgo, longAgo); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// holds returns the names of what is in the folder at path, sorted.
+func holds(t *testing.T, path string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// statFolder returns what the system says about the folder at path.
+func statFolder(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info
+}
+
+func TestOpenTakesAnEmptyFolderThatWasThereAndMakesItPrivate(t *testing.T) {
+	path := folderWith(t)
+	before := statFolder(t, path)
+	if _, err := Open(path); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	after := statFolder(t, path)
+	if runtime.GOOS != "windows" && after.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700", after.Mode().Perm())
+	}
+	// Open has tried the folder with a file, and removed it again.
+	if after.ModTime().Equal(before.ModTime()) {
+		t.Fatal("nothing was written into the folder to try it")
+	}
+	if left := holds(t, path); len(left) != 0 {
+		t.Fatalf("Open left something in the folder: %v", left)
+	}
+}
+
+func TestOpenTakesAFolderThatHoldsOnlyTheAgentsFiles(t *testing.T) {
+	// What an agent keeps in its folder, what it leaves there when it dies
+	// while it writes one of its files or tries the folder, and what a
+	// freshly formatted disk comes with.
+	path := folderWith(t,
+		"admin.sock", "agent.lock", "devices.json", "tls.crt", "tls.key",
+		".devices.json.1234567890", ".tls.crt.42", ".tls.key.42",
+		"probe.LEFTBEHIND", ".probe.LEFTBEHIND.7",
+		"lost+found/",
+	)
+	held := holds(t, path)
+	if _, err := Open(path); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if after := statFolder(t, path); runtime.GOOS != "windows" && after.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %v, want 0700", after.Mode().Perm())
+	}
+	// Everything in it is as it was, and nothing was added.
+	if now := holds(t, path); strings.Join(now, "\n") != strings.Join(held, "\n") {
+		t.Fatalf("the folder holds %v after Open, it held %v", now, held)
+	}
+	for _, name := range held {
+		if name == "lost+found" {
+			continue
+		}
+		if got, err := os.ReadFile(filepath.Join(path, name)); err != nil || string(got) != name {
+			t.Errorf("%s was changed: %q, %v", name, got, err)
+		}
+	}
+}
+
+func TestOpenRefusesAFolderThatHoldsAnotherFileAndLeavesItAlone(t *testing.T) {
+	others := []string{
+		"notes.txt",
+		".bashrc",
+		"devices.json.bak", // the name of a file of the agent with something after it
+		".notes.txt.42",    // a temporary file for a file that is not the agent's
+		"probe",            // what the name of a probe begins with, without its random part
+		"lost+found",       // a file, where only a folder of that name is let pass
+		"sub/",
+	}
+	if runtime.GOOS != "windows" {
+		// What a temporary file begins with, and nothing after it. Windows
+		// drops a dot at the end of a name, so the file cannot be made there.
+		others = append(others, ".devices.json.")
+	}
+	for _, other := range others {
+		// The one file that is not the agent's lies among files that are.
+		path := folderWith(t, "devices.json", other, "tls.key")
+		held, before := holds(t, path), statFolder(t, path)
+		_, err := Open(path)
+		if err == nil {
+			t.Errorf("a folder that holds %s was accepted", other)
+			continue
+		}
+		name := strings.TrimSuffix(other, "/")
+		for _, want := range []string{path, `"` + name + `"`, "folder of its own"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the error does not say %s: %v", other, want, err)
+			}
+		}
+		if strings.Contains(err.Error(), "\n") {
+			t.Errorf("%s: the error is more than one line: %q", other, err)
+		}
+		// The folder is as it was: its mode, what it holds, and when it was
+		// last written to.
+		after := statFolder(t, path)
+		if runtime.GOOS != "windows" && after.Mode().Perm() != 0o755 {
+			t.Errorf("%s: the mode of the refused folder is now %v, it was 0755", other, after.Mode().Perm())
+		}
+		if now := holds(t, path); strings.Join(now, "\n") != strings.Join(held, "\n") {
+			t.Errorf("%s: the refused folder holds %v, it held %v", other, now, held)
+		}
+		if !after.ModTime().Equal(before.ModTime()) {
+			t.Errorf("%s: something was written into the refused folder", other)
+		}
+	}
+}
+
+func TestAFolderMustBelongToTheUserTheAgentRunsAs(t *testing.T) {
+	for _, same := range []uint32{0, 1000} {
+		if err := sameUser("/srv/agent", same, same); err != nil {
+			t.Errorf("a folder of uid %d was refused to an agent that runs as uid %d: %v", same, same, err)
+		}
+	}
+	for _, c := range []struct{ owner, user uint32 }{
+		{1000, 0}, // root must not take a folder that another user can fill
+		{0, 1000},
+		{1000, 1001},
+	} {
+		err := sameUser("/srv/agent", c.owner, c.user)
+		if err == nil {
+			t.Errorf("a folder of uid %d was given to an agent that runs as uid %d", c.owner, c.user)
+			continue
+		}
+		for _, want := range []string{"/srv/agent", "another user", "AGENT_DATA"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("owner %d, agent %d: the error does not say %q: %v", c.owner, c.user, want, err)
+			}
+		}
+	}
+}
+
+func TestAFolderThatCannotStoreTheProbeIsAClearError(t *testing.T) {
+	d := openTemp(t)
+	// Where the probe goes there is a folder that is not empty, so the probe
+	// cannot be renamed into place: the folder takes no file of that name.
+	const name = "probe.x"
+	if err := os.Mkdir(d.Path(name), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.Path(name), "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := d.probe(name)
+	if err == nil {
+		t.Fatal("the probe reported success although it could not be stored")
+	}
+	for _, want := range []string{d.Path(""), "cannot store a file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+	// Nothing of the attempt is left behind.
+	if left := holds(t, d.Path("")); len(left) != 1 || left[0] != name {
+		t.Fatalf("the folder holds %v, want only what was in the way", left)
+	}
+}
+
 func TestWriteFileIsAtomicAndPrivate(t *testing.T) {
 	d := openTemp(t)
 	if err := d.WriteFile("x.json", []byte("one")); err != nil {

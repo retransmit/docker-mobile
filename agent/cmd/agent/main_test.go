@@ -751,6 +751,35 @@ func TestAnUnusableStateFolderIsAClearError(t *testing.T) {
 	}
 }
 
+func TestAnAgentStartsAgainOnTheFolderItHasUsed(t *testing.T) {
+	a := startAgent(t)
+	link, _, _, exit := a.startPair()
+	p := newPhone(t, "https", a.addr)
+	if status, err := p.pairWithLink(link, "Pixel 8"); err != nil || status != http.StatusOK {
+		t.Fatalf("pairing by link: %d, %v", status, err)
+	}
+	if got := exited(t, exit); got != 0 {
+		t.Fatalf("pair exited %d", got)
+	}
+	if err := a.stop(); err != nil {
+		t.Fatalf("serve returned %v", err)
+	}
+	// The folder holds what an agent leaves in it: the device list, the key,
+	// the certificate and the lock file. A folder is taken only when all that
+	// is in it is the agent's own, and all of this is.
+	dataDir := a.env["AGENT_DATA"]
+	for _, name := range []string{"devices.json", "tls.key", "tls.crt", "agent.lock"} {
+		if _, err := os.Stat(filepath.Join(dataDir, name)); err != nil {
+			t.Fatalf("the folder the agent has used lacks %s: %v", name, err)
+		}
+	}
+	again := startAgent(t, "AGENT_DATA", dataDir)
+	p.addr = again.addr
+	if got := p.status("GET", "/containers/json"); got != http.StatusOK {
+		t.Fatalf("the paired phone after the agent started again: %d, want 200", got)
+	}
+}
+
 // commandCase is one command line and what it must produce.
 type commandCase struct {
 	name     string
