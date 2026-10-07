@@ -1,0 +1,196 @@
+{
+  "note": "Shared with the app. key: PBKDF2-HMAC-SHA256(password = the 12 ASCII bytes of the code, salt = 'docker-mobile pair v1' 00 phoneNonce, rounds = 100000, length = 32 bytes); the salt is the context string, one zero byte, then the phone nonce, 54 bytes in all, so both proofs of one attempt have the same key and no other attempt has it. proofs: HMAC-SHA256 keyed with that key over 'docker-mobile pair v1' 00 'phone'|'agent' 00 len(fingerprint) as one byte, fingerprint, phoneNonce, [agentNonce]. typed (in proofs): one way a person might enter that code; it is normalized first, and what is stretched is the result, code. normalization: what a typed code becomes (null = rejected). links: the link the agent shows for the six fields; an empty host, port, fingerprint, scheme or name is left out, and values are form-encoded (a space is '+', a reserved or non-ASCII character is %XX for each UTF-8 byte). A link has neither host nor port when the agent knows no address to advertise; the app then asks for the address. A host that is an IPv6 address is the address alone, without brackets, each colon encoded as %3A, and the port stays a field of its own.",
+  "proofs": [
+    {
+      "name": "pinned certificate",
+      "code": "K7QM2XPA9TRC",
+      "typed": "k7qm-2xpa-9trc",
+      "fingerprintHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
+      "keyHex": "ab82b066aadbd2d286357033e67c6a5a40d0bbdb72e3bc71f28186715f5863c9",
+      "phoneProofHex": "8513841281ab543d50acbc51d19905198ebfcfc8e32bd9b4171d0dad69168417",
+      "agentProofHex": "b11a58f3ed9c02c8d6a74324517b68a461f34096a538d752c99ad10bb1697b4f"
+    },
+    {
+      "name": "second pinned certificate",
+      "code": "0123456789AB",
+      "typed": "o123 4567 89ab",
+      "fingerprintHex": "03a231792349424dc65f1b5f9ca83beff282966a02fb57741bb89c83c2651119",
+      "phoneNonceHex": "4bb55ab4d5a8a2bb16af8bd6e966b60ac68dd4e482b8d9085d4dc83f3a237027",
+      "agentNonceHex": "d3a5a4f9f1621065d377bfc50571af708b54b666e77a923242485bb476b8b91d",
+      "keyHex": "3883572731ef45d28535c4753c295fe18186f546158ae58e03372c5d9be333f8",
+      "phoneProofHex": "fce292dac41f1d195692f7476ba54fadc2e195078307f149cc09de5730cce2bf",
+      "agentProofHex": "58e520f14a9ee46198c9dda4354e611124b35e35f4973699fadf8e8cddf0f46d"
+    },
+    {
+      "name": "no pinned certificate (behind a proxy)",
+      "code": "ZZZZZZZZZZZZ",
+      "typed": "zzzz-zzzz-zzzz",
+      "fingerprintHex": "",
+      "phoneNonceHex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "agentNonceHex": "5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150",
+      "keyHex": "9a4abb7e2aa7f841a59634e84b3478468623f9ebd776b103bae3f3b27ab9d860",
+      "phoneProofHex": "124d82bf616bef9819262c33dc825d438adbcb455bd8589ed393faa9c5c9ef62",
+      "agentProofHex": "0ca8fbccc07625fdb29b39ac4237f384c727e5a6c19b9ac8d31440b821b1df8b"
+    }
+  ],
+  "normalization": [
+    {
+      "input": "K7QM-2XPA-9TRC",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "k7qm 2xpa 9trc",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": " k7qm2xpa9trc ",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "OIL0-oil0-OIL0",
+      "code": "011001100110"
+    },
+    {
+      "input": "K7QM-2XPA-9TR",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TRCC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TRU",
+      "code": null
+    },
+    {
+      "input": "K7QM_2XPA_9TRC",
+      "code": null
+    },
+    {
+      "input": "",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TR\u0131",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TR\u017f",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TR\u00df",
+      "code": null
+    },
+    {
+      "input": "K7QM\t2XPA\t9TRC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TRC\n",
+      "code": null
+    },
+    {
+      "input": "K7QM\u00a02XPA\u00a09TRC",
+      "code": null
+    },
+    {
+      "input": "K7QM\u20132XPA\u20139TRC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-\uff19TRC",
+      "code": null
+    },
+    {
+      "input": "k7qm-2xpa-9tru",
+      "code": null
+    },
+    {
+      "input": "\u212a7QM-2XPA-9TRC",
+      "code": null
+    },
+    {
+      "input": "K7QM-2XPA-9TR\u0130",
+      "code": null
+    },
+    {
+      "input": "0123456789ab",
+      "code": "0123456789AB"
+    },
+    {
+      "input": "cdefghjkmnpq",
+      "code": "CDEFGHJKMNPQ"
+    },
+    {
+      "input": "rstvwxyz0000",
+      "code": "RSTVWXYZ0000"
+    },
+    {
+      "input": "K7-QM2XPA9TRC",
+      "code": "K7QM2XPA9TRC"
+    },
+    {
+      "input": "K7QM--2XPA--9TRC",
+      "code": "K7QM2XPA9TRC"
+    }
+  ],
+  "links": [
+    {
+      "host": "192.168.1.20",
+      "port": "8443",
+      "fingerprint": "A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk",
+      "scheme": "",
+      "code": "0123456789AB",
+      "name": "nas",
+      "link": "dockermobile://pair?c=0123456789AB&f=A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk&h=192.168.1.20&n=nas&p=8443&v=1"
+    },
+    {
+      "host": "docker.example.com",
+      "port": "443",
+      "fingerprint": "",
+      "scheme": "https",
+      "code": "ZZZZZZZZZZZZ",
+      "name": "build server",
+      "link": "dockermobile://pair?c=ZZZZZZZZZZZZ&h=docker.example.com&n=build+server&p=443&s=https&v=1"
+    },
+    {
+      "host": "my-server.lan",
+      "port": "8443",
+      "fingerprint": "OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI",
+      "scheme": "",
+      "code": "K7QM2XPA9TRC",
+      "name": "R&D = lab #1 + 50% caf\u00e9",
+      "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI&h=my-server.lan&n=R%26D+%3D+lab+%231+%2B+50%25+caf%C3%A9&p=8443&v=1"
+    },
+    {
+      "host": "10.0.0.7",
+      "port": "8443",
+      "fingerprint": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "scheme": "",
+      "code": "K7QM2XPA9TRC",
+      "name": "",
+      "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&h=10.0.0.7&p=8443&v=1"
+    },
+    {
+      "host": "",
+      "port": "",
+      "fingerprint": "OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI",
+      "scheme": "",
+      "code": "K7QM2XPA9TRC",
+      "name": "home lab",
+      "link": "dockermobile://pair?c=K7QM2XPA9TRC&f=OfCPv7Bu5FeqspEEZcUtbwd9RqmtauCT2Hr78uU9WwI&n=home+lab&v=1"
+    },
+    {
+      "host": "fd12:3456:789a:1::20",
+      "port": "8443",
+      "fingerprint": "A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk",
+      "scheme": "",
+      "code": "0123456789AB",
+      "name": "nas",
+      "link": "dockermobile://pair?c=0123456789AB&f=A6IxeSNJQk3GXxtfnKg77_KClmoC-1d0G7icg8JlERk&h=fd12%3A3456%3A789a%3A1%3A%3A20&n=nas&p=8443&v=1"
+    }
+  ]
+}

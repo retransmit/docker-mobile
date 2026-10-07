@@ -38,6 +38,7 @@ app/android/key.properties
 
 # === Go (agent/) ===
 agent/bin/
+agent/.agent-data/
 agent/vendor/
 *.test
 *.out
