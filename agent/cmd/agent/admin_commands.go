@@ -25,17 +25,14 @@ func accessLabel(role string) string {
 
 func cmdPair(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	readOnly := fs.Bool("read-only", false, "pair a phone that may look but not change anything")
-	name := fs.String("name", "", "name for the phone (default: what the phone calls itself)")
-	host := fs.String("host", "", "address phones reach this agent at, host or host:port")
+	// The word in back quotes is what the help shows as the flag's value.
+	name := fs.String("name", "", "`NAME` for the phone (default: what the phone calls itself)")
+	host := fs.String("host", "", "`ADDR` at which phones reach this agent, host or host:port")
 	invert := fs.Bool("invert", false, "draw the QR code for a light terminal")
 	noQR := fs.Bool("no-qr", false, "do not draw the QR code")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("pair: %v", err)
-	}
-	if fs.NArg() > 0 {
-		return fmt.Errorf("pair: unexpected argument %q", fs.Arg(0))
+	if done, err := parseArgs(fs, args, "pair [--read-only] [--name NAME] [--host ADDR] [--invert] [--no-qr]", stdout); done || err != nil {
+		return err
 	}
 	req := admin.PairRequest{Name: *name, Host: *host}
 	if *readOnly {
@@ -44,10 +41,11 @@ func cmdPair(ctx context.Context, args []string, getenv func(string) string, std
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	var end admin.Event
+	// end is the event that ended the pairing; nil for as long as none has.
+	var end *admin.Event
 	err := admin.NewClient(config.DataDir(getenv)).Pair(ctx, req, func(e admin.Event) {
 		if e.Event != admin.EventStarted {
-			end = e
+			end = &e
 			return
 		}
 		if !*noQR {
@@ -75,14 +73,27 @@ func cmdPair(ctx context.Context, args []string, getenv func(string) string, std
 		fmt.Fprintln(stdout)
 		fmt.Fprintf(stdout, "The code works once and expires in %d minutes. Waiting for the phone (Ctrl-C cancels)...\n", (e.ExpiresIn+59)/60)
 	})
-	if errors.Is(err, context.Canceled) {
-		return errors.New("pairing cancelled; the code no longer works")
-	}
-	if err != nil {
+	if end == nil {
+		// The pairing did not end where this command could see it, so the
+		// command does not know whether a phone was paired. The agent uses
+		// the code up and stores the device before it answers the phone: a
+		// phone can have paired in the very moment the command was
+		// interrupted or the agent stopped.
+		switch {
+		case errors.Is(err, context.Canceled):
+			return errors.New(`pairing cancelled; the code no longer works. If a phone used it in the same moment it is paired: check with "docker-mobile-agent devices"`)
+		case err == nil, errors.Is(err, admin.ErrStopped):
+			return fmt.Errorf(`%w; the code no longer works. If a phone used it in the same moment it is paired, and still is when the agent runs again: check then with "docker-mobile-agent devices"`, admin.ErrStopped)
+		}
 		return err
 	}
+	// How the pairing ended is reported whatever err says: a phone that was
+	// paired is paired, also when the command was interrupted just then.
 	switch end.Event {
 	case "paired":
+		if end.Device == nil {
+			return errors.New(`the agent says a phone was paired, but not which one: look at "docker-mobile-agent devices"`)
+		}
 		fmt.Fprintf(stdout, "Paired: %s (id %s, %s)\n", end.Device.Name, end.Device.ID, accessLabel(end.Device.Role))
 		return nil
 	case "expired":
@@ -98,7 +109,10 @@ func cmdPair(ctx context.Context, args []string, getenv func(string) string, std
 	}
 }
 
-func cmdDevices(ctx context.Context, getenv func(string) string, stdout io.Writer) error {
+func cmdDevices(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
+	if done, err := parseArgs(flag.NewFlagSet("devices", flag.ContinueOnError), args, "devices", stdout); done || err != nil {
+		return err
+	}
 	list, err := admin.NewClient(config.DataDir(getenv)).Devices(ctx)
 	if err != nil {
 		return err
@@ -117,10 +131,14 @@ func cmdDevices(ctx context.Context, getenv func(string) string, stdout io.Write
 }
 
 func cmdRevoke(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
-	if len(args) != 1 || args[0] == "" {
+	fs := flag.NewFlagSet("revoke", flag.ContinueOnError)
+	if done, err := parseFlags(fs, args, "revoke ID", stdout); done || err != nil {
+		return err
+	}
+	if fs.NArg() != 1 || fs.Arg(0) == "" {
 		return errors.New("revoke: give the id of one device (see: docker-mobile-agent devices)")
 	}
-	dev, closed, err := admin.NewClient(config.DataDir(getenv)).Revoke(ctx, args[0])
+	dev, closed, err := admin.NewClient(config.DataDir(getenv)).Revoke(ctx, fs.Arg(0))
 	if err != nil {
 		return err
 	}

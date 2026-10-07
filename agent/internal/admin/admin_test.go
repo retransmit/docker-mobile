@@ -285,6 +285,45 @@ func TestLeavingThePairCommandCancelsTheCode(t *testing.T) {
 	}
 }
 
+func TestPairReportsAnOutcomeItHasHandedOnWhateverBecomesOfTheContext(t *testing.T) {
+	// An agent that sends the outcome and then keeps the stream open. The
+	// command line is interrupted with the outcome in hand: that is the
+	// moment a phone completes the pairing and its owner presses Ctrl-C.
+	dir := shortDir(t)
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		enc := json.NewEncoder(w)
+		enc.Encode(Event{Event: EventStarted})
+		enc.Encode(Event{Event: "paired", Device: &DeviceInfo{ID: "0a1b2c3d", Name: "Pixel 8", Role: "full"}})
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var got []string
+	done := make(chan error, 1)
+	go func() {
+		done <- NewClient(dir.Path("")).Pair(ctx, PairRequest{}, func(e Event) {
+			got = append(got, e.Event)
+			if e.Event == "paired" {
+				cancel()
+			}
+		})
+	}()
+	if err := finished(t, done); err != nil {
+		t.Fatalf("Pair returned %v although it had handed on how the pairing ended", err)
+	}
+	if len(got) != 2 || got[0] != EventStarted || got[1] != "paired" {
+		t.Fatalf("events = %v, want started and paired", got)
+	}
+}
+
 func TestASecondPairReplacesTheFirst(t *testing.T) {
 	f := start(t)
 	firstEvents, firstDone := f.pairAsync(context.Background(), PairRequest{})
@@ -400,6 +439,52 @@ func TestRevokeRemovesTheDeviceAndClosesItsRequests(t *testing.T) {
 	}
 	if _, _, err := f.client.Revoke(context.Background(), "../devices"); err == nil {
 		t.Fatal("an id with a path in it was accepted")
+	}
+}
+
+func TestRevokeSaysTheDeviceIsStillPairedWhenTheRemovalCannotBeStored(t *testing.T) {
+	// The device list lives in a folder of its own here, apart from the
+	// socket and the lock, so that the folder can go while the server runs.
+	store := shortDir(t)
+	devices, err := state.LoadDevices(store, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := start(t, func(s *Server) { s.Devices = devices })
+	dev, token, err := devices.Add("phone", state.RoleFull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, release := f.conns.Track(context.Background(), dev.ID)
+	defer release()
+	// Nothing can be written from here on.
+	if err := os.RemoveAll(store.Path("")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = f.client.Revoke(context.Background(), dev.ID)
+	if err == nil {
+		t.Fatal("Revoke reported success although the removal could not be stored")
+	}
+	if !strings.HasPrefix(err.Error(), "the device is still paired") {
+		t.Errorf("the error does not begin by saying that the device is still paired: %v", err)
+	}
+	for _, want := range []string{"the removal could not be stored", "write devices.json"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the error does not say %q: %v", want, err)
+		}
+	}
+	// And so it is: the device works as before and its request is open.
+	if _, ok := devices.Authenticate(token); !ok {
+		t.Fatal("the device no longer authenticates")
+	}
+	if list := devices.List(); len(list) != 1 || list[0].ID != dev.ID {
+		t.Fatalf("the list holds %d devices, want the one whose removal failed", len(list))
+	}
+	select {
+	case <-open.Done():
+		t.Fatal("the open request of the device was closed")
+	default:
 	}
 }
 

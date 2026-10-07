@@ -351,7 +351,10 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	dev, found, err := s.Devices.Remove(id)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errorResponse{err.Error()})
+		// The device is back in the list and none of its requests was
+		// closed. The answer says that first: the cause alone names a file,
+		// and reads as if the phone were gone.
+		writeJSON(w, http.StatusInternalServerError, errorResponse{"the device is still paired and its connections stay open: the removal could not be stored: " + err.Error()})
 		return
 	}
 	if !found {

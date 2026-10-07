@@ -17,7 +17,10 @@ import (
 	"github.com/retransmit/docker-mobile/agent/internal/tlsid"
 )
 
-func cmdFingerprint(getenv func(string) string, stdout io.Writer) error {
+func cmdFingerprint(args []string, getenv func(string) string, stdout io.Writer) error {
+	if done, err := parseArgs(flag.NewFlagSet("fingerprint", flag.ContinueOnError), args, "fingerprint", stdout); done || err != nil {
+		return err
+	}
 	dataDir := config.DataDir(getenv)
 	fp, err := tlsid.ReadFingerprint(dataDir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -32,12 +35,11 @@ func cmdFingerprint(getenv func(string) string, stdout io.Writer) error {
 
 // cmdHealthcheck asks the agent on this machine for /healthz. Over TLS it
 // trusts exactly the certificate in the state folder.
-func cmdHealthcheck(ctx context.Context, args []string, getenv func(string) string) error {
+func cmdHealthcheck(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("healthcheck", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
 	insecure := fs.Bool("insecure-http", false, "the agent serves plain HTTP")
-	if err := fs.Parse(args); err != nil {
-		return fmt.Errorf("healthcheck: %v", err)
+	if done, err := parseArgs(fs, args, "healthcheck [--insecure-http]", stdout); done || err != nil {
+		return err
 	}
 	cfg, err := config.Load(getenv, *insecure)
 	if err != nil {
@@ -73,6 +75,14 @@ func cmdHealthcheck(ctx context.Context, args []string, getenv func(string) stri
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("the agent answered %s", resp.Status)
 	}
+	return nil
+}
+
+func cmdVersion(args []string, stdout io.Writer) error {
+	if done, err := parseArgs(flag.NewFlagSet("version", flag.ContinueOnError), args, "version", stdout); done || err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, versionLine())
 	return nil
 }
 

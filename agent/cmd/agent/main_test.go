@@ -243,7 +243,13 @@ func (a *agent) pinned(token string) *phone {
 }
 
 func (p *phone) do(method, path string, body []byte) (*http.Response, error) {
-	req, err := http.NewRequest(method, p.scheme+"://"+p.addr+path, bytes.NewReader(body))
+	return p.doWithin(context.Background(), method, path, body)
+}
+
+// doWithin is do for a request that ends with ctx, the reading of its answer
+// included.
+func (p *phone) doWithin(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, p.scheme+"://"+p.addr+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -669,6 +675,7 @@ type commandCase struct {
 	code     int
 	inStdout string
 	inStderr string
+	stderrIs string // when not empty, all that standard error may hold
 }
 
 func runCommandCases(t *testing.T, cases []commandCase) {
@@ -689,6 +696,9 @@ func runCommandCases(t *testing.T, cases []commandCase) {
 		if c.inStderr != "" && !strings.Contains(errOut.String(), c.inStderr) {
 			t.Errorf("%s: stderr lacks %q: %s", c.name, c.inStderr, errOut.String())
 		}
+		if c.stderrIs != "" && errOut.String() != c.stderrIs {
+			t.Errorf("%s: stderr is %q, want %q", c.name, errOut.String(), c.stderrIs)
+		}
 	}
 }
 
@@ -696,11 +706,82 @@ func TestCommandLine(t *testing.T) {
 	runCommandCases(t, []commandCase{
 		{name: "unknown command", args: []string{"frobnicate"}, code: 2, inStderr: `unknown command "frobnicate"`},
 		{name: "help", args: []string{"help"}, code: 0, inStdout: "docker-mobile-agent fingerprint"},
+		{name: "help lists itself", args: []string{"help"}, code: 0, inStdout: "docker-mobile-agent help "},
+		{name: "help says how the switch for plain HTTP is read", args: []string{"help"}, code: 0, inStdout: "AGENT_INSECURE_HTTP   1, true, yes or on: serve plain HTTP"},
 		{name: "version", args: []string{"version"}, code: 0, inStdout: "docker-mobile-agent dev (commit "},
 		{name: "fingerprint before the first run", args: []string{"fingerprint"}, code: 1, inStderr: "no certificate"},
 		{name: "a short shared token", env: []string{"AGENT_TOKEN", "too-short"}, code: 1, inStderr: "AGENT_TOKEN is too short: use at least 16 characters"},
 		{name: "a bad listen address", args: []string{"serve"}, env: []string{"AGENT_LISTEN", "nope"}, code: 1, inStderr: "AGENT_LISTEN"},
-		{name: "a bad flag for serve", args: []string{"--verbose"}, code: 1, inStderr: "flag provided but not defined"},
+		{name: "a bad flag for serve", args: []string{"--verbose"}, code: 1,
+			stderrIs: "docker-mobile-agent: serve: flag provided but not defined: -verbose (see: docker-mobile-agent serve --help)\n"},
+		{name: "a bad flag for healthcheck", args: []string{"healthcheck", "--verbose"}, code: 1,
+			stderrIs: "docker-mobile-agent: healthcheck: flag provided but not defined: -verbose (see: docker-mobile-agent healthcheck --help)\n"},
 		{name: "healthcheck without an agent", args: []string{"healthcheck", "--insecure-http"}, env: []string{"AGENT_LISTEN", "127.0.0.1:1"}, code: 1},
+		{name: "serve with a stray argument", args: []string{"serve", "extra"}, code: 1,
+			stderrIs: "docker-mobile-agent: serve: unexpected argument \"extra\" (see: docker-mobile-agent serve --help)\n"},
+		{name: "a command after a flag", args: []string{"--insecure-http", "healthcheck"}, code: 1, inStderr: `serve: unexpected argument "healthcheck"`},
+		{name: "fingerprint with a stray argument", args: []string{"fingerprint", "extra"}, code: 1, inStderr: `fingerprint: unexpected argument "extra"`},
+		{name: "healthcheck with a stray argument", args: []string{"healthcheck", "extra"}, code: 1, inStderr: `healthcheck: unexpected argument "extra"`},
+		{name: "version with a stray argument", args: []string{"version", "extra"}, code: 1, inStderr: `version: unexpected argument "extra"`},
 	})
+}
+
+func TestHelpAtTheTopIsTheUsageText(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"-h"}, {"help"}} {
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), args, func(string) string { return "" }, &out, &errOut)
+		if code != 0 || out.String() != usage || errOut.Len() != 0 {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q", args, code, out.String(), errOut.String())
+		}
+	}
+}
+
+func TestEveryCommandShowsItsOwnHelp(t *testing.T) {
+	for _, c := range []struct {
+		command  string
+		synopsis string   // how the command is called, as the usage text has it
+		flags    []string // every flag with its description, as the help shows it
+	}{
+		{"serve", "docker-mobile-agent [serve] [--insecure-http]", []string{
+			"  --insecure-http\n        serve plain HTTP, behind a proxy that terminates TLS\n",
+		}},
+		{"pair", "docker-mobile-agent pair [--read-only] [--name NAME] [--host ADDR] [--invert] [--no-qr]", []string{
+			"  --read-only\n        pair a phone that may look but not change anything\n",
+			"  --name NAME\n        NAME for the phone (default: what the phone calls itself)\n",
+			"  --host ADDR\n        ADDR at which phones reach this agent, host or host:port\n",
+			"  --invert\n        draw the QR code for a light terminal\n",
+			"  --no-qr\n        do not draw the QR code\n",
+		}},
+		{"devices", "docker-mobile-agent devices", nil},
+		{"revoke", "docker-mobile-agent revoke ID", nil},
+		{"fingerprint", "docker-mobile-agent fingerprint", nil},
+		{"healthcheck", "docker-mobile-agent healthcheck [--insecure-http]", []string{
+			"  --insecure-http\n        the agent serves plain HTTP\n",
+		}},
+		{"version", "docker-mobile-agent version", nil},
+	} {
+		if !strings.Contains(usage, "\n  "+c.synopsis) {
+			t.Errorf("%s: the usage text does not show the command as %q", c.command, c.synopsis)
+		}
+		for _, help := range []string{"--help", "-h"} {
+			var out, errOut bytes.Buffer
+			// No environment: a command that did more than show its help
+			// would fail on it, or would not return.
+			code := run(context.Background(), []string{c.command, help}, func(string) string { return "" }, &out, &errOut)
+			if code != 0 || errOut.Len() != 0 {
+				t.Errorf("%s %s: exit %d, stderr %q", c.command, help, code, errOut.String())
+			}
+			if !strings.HasPrefix(out.String(), "Usage: "+c.synopsis+"\n") {
+				t.Errorf("%s %s: the help does not begin with how the command is called: %q", c.command, help, out.String())
+			}
+			for _, want := range c.flags {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("%s %s: the help lacks %q: %q", c.command, help, want, out.String())
+				}
+			}
+			if strings.Contains(out.String(), "Flags:") != (len(c.flags) > 0) {
+				t.Errorf("%s %s: the help is wrong about whether the command has flags: %q", c.command, help, out.String())
+			}
+		}
+	}
 }

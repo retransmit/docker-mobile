@@ -100,6 +100,13 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 // Pair starts a pairing and calls onEvent for the "started" event and then
 // for the one that ends it. It returns when the pairing is over. Cancelling
 // ctx cancels the pairing.
+//
+// Once the event that ends the pairing has been handed to onEvent, Pair
+// returns nil, whatever has become of ctx by then: how the pairing ended is
+// known, and a phone that was paired stays paired. An error therefore means
+// that the pairing did not begin, or that the caller did not see it end:
+// then it is the error of ctx when ctx ended first, and ErrStopped when the
+// stream broke off.
 func (c *Client) Pair(ctx context.Context, req PairRequest, onEvent func(Event)) error {
 	resp, err := c.do(ctx, http.MethodPost, "/pair", req)
 	if err != nil {
@@ -107,23 +114,21 @@ func (c *Client) Pair(ctx context.Context, req PairRequest, onEvent func(Event))
 	}
 	defer resp.Body.Close()
 	lines := bufio.NewScanner(resp.Body)
-	last := ""
 	for lines.Scan() {
 		var e Event
 		if err := json.Unmarshal(lines.Bytes(), &e); err != nil {
 			return fmt.Errorf("unreadable answer from the agent: %w", err)
 		}
-		last = e.Event
 		onEvent(e)
+		if e.Event != EventStarted {
+			return nil
+		}
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	if last == "" || last == EventStarted {
-		// The stream broke off without an ending event.
-		return ErrStopped
-	}
-	return lines.Err()
+	// The stream broke off without an ending event.
+	return ErrStopped
 }
 
 // Devices lists the paired devices, oldest first.

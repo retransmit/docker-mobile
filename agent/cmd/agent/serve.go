@@ -45,11 +45,10 @@ func (w serverLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func cmdServe(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
+func cmdServe(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
 	insecure := fs.Bool("insecure-http", false, "serve plain HTTP, behind a proxy that terminates TLS")
-	if err := fs.Parse(args); err != nil {
+	if done, err := parseArgs(fs, args, "[serve] [--insecure-http]", stdout); done || err != nil {
 		return err
 	}
 	cfg, err := config.Load(getenv, *insecure)

@@ -32,10 +32,10 @@ AGENT_DATA=./.agent-data go run ./cmd/agent devices
 AGENT_DATA=./.agent-data go run ./cmd/agent revoke <id>
 ```
 
-`pair --read-only` pairs a phone that may look but not change anything. It
-can still see everything: lists, logs, and the full inspect output, which
-includes every container's environment variables. Two consequences when
-the agent itself runs in a container:
+`pair --read-only` pairs a phone that can change nothing. It can read the
+lists, the logs and the full inspect output of containers, which includes
+their environment variables. Two consequences when the agent itself runs
+in a container:
 
 - Do not give the agent `AGENT_TOKEN` through its container's environment.
   A read-only phone could read it there, and that token gives full
