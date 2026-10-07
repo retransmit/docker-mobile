@@ -42,6 +42,10 @@ type Options struct {
 	Conns *conns.Registry
 	// Version is what whoami and a pairing report; it may be empty.
 	Version string
+	// RequestTimeout is how long a caller that has not been authenticated may
+	// take to send the rest of its request once the headers are in. Zero
+	// means 10 seconds; tests shorten it.
+	RequestTimeout time.Duration
 	// Log receives the access log; nil discards it.
 	Log *slog.Logger
 	// Now is the clock; nil means time.Now.
@@ -65,6 +69,9 @@ func New(o Options) (http.Handler, error) {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.RequestTimeout == 0 {
+		o.RequestTimeout = defaultRequestTimeout
 	}
 	dockerProxy, err := proxy.New(o.DockerHost)
 	if err != nil {
@@ -90,15 +97,18 @@ func New(o Options) (http.Handler, error) {
 		w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("POST /agent/v1/pair", s.handlePair)
-	mux.Handle("GET /agent/v1/whoami", authn.Require(http.HandlerFunc(s.handleWhoami)))
+	// Every request starts under a read deadline (see the last line). On the
+	// three routes that need a credential it is lifted as soon as the caller
+	// is known.
+	mux.Handle("GET /agent/v1/whoami", authn.Require(liftReadDeadline(http.HandlerFunc(s.handleWhoami))))
 	// Nothing else under /agent/ exists; it must not fall through to Docker.
 	mux.HandleFunc("/agent/", func(w http.ResponseWriter, _ *http.Request) {
 		auth.WriteError(w, http.StatusNotFound, "not found")
 	})
-	mux.Handle("GET /exec/{id}/ws", authn.Require(fullOnly(execHandler)))
-	mux.Handle("/", authn.Require(roleGate(limitBody(dockerProxy))))
+	mux.Handle("GET /exec/{id}/ws", authn.Require(liftReadDeadline(fullOnly(execHandler))))
+	mux.Handle("/", authn.Require(liftReadDeadline(roleGate(limitBody(dockerProxy)))))
 
-	return accessLog(o.Log, o.Now, rejectBrowsers(mux)), nil
+	return readDeadline(o.RequestTimeout, accessLog(o.Log, o.Now, rejectBrowsers(mux))), nil
 }
 
 type server struct {

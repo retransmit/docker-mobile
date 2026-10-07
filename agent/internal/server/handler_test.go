@@ -1,20 +1,24 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/retransmit/docker-mobile/agent/internal/conns"
 	"github.com/retransmit/docker-mobile/agent/internal/pairing"
 	"github.com/retransmit/docker-mobile/agent/internal/state"
@@ -79,7 +83,9 @@ type fixture struct {
 	fp      []byte
 }
 
-func newFixture(t *testing.T, legacyToken string, fingerprint []byte) *fixture {
+// newFixture builds a handler over a fresh state folder and a fake daemon.
+// configure changes the options the handler is built with.
+func newFixture(t *testing.T, legacyToken string, fingerprint []byte, configure ...func(*Options)) *fixture {
 	t.Helper()
 	dir, err := state.Open(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -99,7 +105,7 @@ func newFixture(t *testing.T, legacyToken string, fingerprint []byte) *fixture {
 		log:     &bytes.Buffer{},
 		fp:      fingerprint,
 	}
-	f.handler, err = New(Options{
+	o := Options{
 		DockerHost:  "tcp://" + f.daemon.Listener.Addr().String(),
 		Devices:     devices,
 		LegacyToken: legacyToken,
@@ -110,7 +116,11 @@ func newFixture(t *testing.T, legacyToken string, fingerprint []byte) *fixture {
 		Version:     "1.2.3",
 		Log:         slog.New(slog.NewTextHandler(f.log, nil)),
 		Now:         c.now,
-	})
+	}
+	for _, change := range configure {
+		change(&o)
+	}
+	f.handler, err = New(o)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -643,5 +653,211 @@ func TestTheFailureWarningNamesTheAddressItself(t *testing.T) {
 	}
 	if strings.Contains(f.log.String(), "/64") {
 		t.Fatalf("a warning names a network instead of an address: %s", f.log.String())
+	}
+}
+
+// requestTimeout is the read deadline in the tests below: more than a
+// request that is sent at once needs, and short enough to wait out.
+const requestTimeout = 250 * time.Millisecond
+
+// patience is how long these tests wait for something that is due. It is far
+// more than anything here takes, also on a slow machine, and it is what ends
+// a test that would otherwise wait for ever.
+const patience = 5 * time.Second
+
+// hurried gives a fixture requestTimeout as its read deadline.
+func hurried(o *Options) { o.RequestTimeout = requestTimeout }
+
+// listen serves the fixture's handler on a real listener, as the agent does,
+// and returns the address. A read deadline is set on a connection, and the
+// recorder of the other tests has none.
+func (f *fixture) listen(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(f.handler)
+	t.Cleanup(srv.Close)
+	return srv.Listener.Addr().String()
+}
+
+// dial opens a raw connection to the agent at addr. What is read or written
+// on it fails once wait is over: an agent that does not answer then fails a
+// check instead of hanging the test.
+func dial(t *testing.T, addr string, wait time.Duration) net.Conn {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", addr, patience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This runs before the cleanup of the server it connects to, which was
+	// registered earlier: a server that closes waits for its connections.
+	t.Cleanup(func() { conn.Close() })
+	conn.SetDeadline(time.Now().Add(wait))
+	return conn
+}
+
+// bodyNeverComes sends the head of a POST for path that announces a body,
+// and then nothing more. It returns the status of the answer. That the
+// answer comes, and that the agent closes the connection after it, is
+// checked here: both within the read deadline and a margin.
+func bodyNeverComes(t *testing.T, addr, path string) int {
+	t.Helper()
+	conn := dial(t, addr, requestTimeout+patience)
+	began := time.Now()
+	head := "POST " + path + " HTTP/1.1\r\nHost: agent\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n"
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatalf("POST %s without its body: no answer after %v: %v", path, time.Since(began).Round(time.Millisecond), err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if _, err := br.ReadByte(); err != io.EOF {
+		t.Fatalf("POST %s without its body: the connection is still open after %v: %v", path, time.Since(began).Round(time.Millisecond), err)
+	}
+	return resp.StatusCode
+}
+
+func TestACallerWithoutCredentialsIsAnsweredThoughItsBodyNeverComes(t *testing.T) {
+	f := newFixture(t, legacy, agentFP, hurried)
+	if status := bodyNeverComes(t, f.listen(t), "/containers/create"); status != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", status)
+	}
+	if n := len(f.daemon.requests()); n != 0 {
+		t.Fatalf("%d requests reached the daemon", n)
+	}
+}
+
+func TestAPairingRequestIsAnsweredThoughItsBodyNeverComes(t *testing.T) {
+	f := newFixture(t, "", agentFP, hurried)
+	if status := bodyNeverComes(t, f.listen(t), "/agent/v1/pair"); status != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", status)
+	}
+}
+
+func TestACallerWithCredentialsMayTakeItsTimeOverTheBody(t *testing.T) {
+	f := newFixture(t, legacy, agentFP, hurried)
+	const body = `{"Image":"nginx"}`
+	conn := dial(t, f.listen(t), 2*requestTimeout+patience)
+	head := "POST /containers/create HTTP/1.1\r\nHost: agent\r\nAuthorization: Bearer " + legacy +
+		"\r\nContent-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n"
+	if _, err := io.WriteString(conn, head); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * requestTimeout)
+	if _, err := io.WriteString(conn, body); err != nil {
+		t.Fatalf("sending the body after twice the read deadline: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a body sent after twice the read deadline: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code = %d, want 200", resp.StatusCode)
+	}
+	if seen := f.daemon.requests(); len(seen) != 1 || !strings.HasSuffix(seen[0], " "+body) {
+		t.Fatalf("the daemon saw %q, want the one request with its body", seen)
+	}
+}
+
+// eventLine is what liveDaemon sends on a stream.
+const eventLine = "{\"Type\":\"container\"}\n"
+
+// liveDaemon is a fake Docker daemon for requests that stay open. It starts
+// a terminal the way the daemon does: POST /exec/<id>/start is answered with
+// 101 on a connection it takes over, and from then on it sends back whatever
+// it is sent. Every other request is a stream: it gets eventLine at once, and
+// again for every value on more, until the caller goes away.
+type liveDaemon struct {
+	*httptest.Server
+	more chan struct{}
+}
+
+func newLiveDaemon(t *testing.T) *liveDaemon {
+	t.Helper()
+	// Room for one value, so that asking for a line never blocks, also when
+	// the stream it is meant for has ended.
+	d := &liveDaemon{more: make(chan struct{}, 1)}
+	d.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/exec/") {
+			io.Copy(io.Discard, r.Body)
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			rw.WriteString("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n")
+			rw.Flush()
+			io.Copy(conn, rw)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		for {
+			w.Write([]byte(eventLine))
+			w.(http.Flusher).Flush()
+			select {
+			case <-d.more:
+			case <-r.Context().Done():
+				return
+			}
+		}
+	}))
+	t.Cleanup(d.Close)
+	return d
+}
+
+func TestAStreamAndATerminalOutliveTheReadDeadline(t *testing.T) {
+	d := newLiveDaemon(t)
+	f := newFixture(t, legacy, agentFP, hurried, func(o *Options) {
+		o.DockerHost = "tcp://" + d.Listener.Addr().String()
+	})
+	addr := f.listen(t)
+	const wait = 3 * requestTimeout
+
+	// A stream. Its answer is never closed here: closing it would read the
+	// stream to its end. Closing the connection, when the test is over, ends it.
+	conn := dial(t, addr, wait+patience)
+	if _, err := io.WriteString(conn, "GET /events HTTP/1.1\r\nHost: agent\r\nAuthorization: Bearer "+legacy+"\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("open the stream: %v", err)
+	}
+	stream := bufio.NewReader(resp.Body)
+	if line, err := stream.ReadString('\n'); err != nil || line != eventLine {
+		t.Fatalf("the stream did not start: %q, %v", line, err)
+	}
+
+	// A terminal: what is typed into it comes back from the daemon.
+	dialer := websocket.Dialer{HandshakeTimeout: patience}
+	ws, _, err := dialer.Dial("ws://"+addr+"/exec/abc123/ws", http.Header{"Authorization": {"Bearer " + legacy}})
+	if err != nil {
+		t.Fatalf("open the terminal: %v", err)
+	}
+	t.Cleanup(func() { ws.Close() })
+	typed := func(text string) (string, error) {
+		ws.SetWriteDeadline(time.Now().Add(patience))
+		if err := ws.WriteMessage(websocket.BinaryMessage, []byte(text)); err != nil {
+			return "", err
+		}
+		ws.SetReadDeadline(time.Now().Add(patience))
+		_, back, err := ws.ReadMessage()
+		return string(back), err
+	}
+	if back, err := typed("before"); err != nil || back != "before" {
+		t.Fatalf("the terminal is not through to the daemon: %q, %v", back, err)
+	}
+
+	time.Sleep(wait)
+
+	d.more <- struct{}{}
+	if line, err := stream.ReadString('\n'); err != nil || line != eventLine {
+		t.Errorf("the stream did not outlive the read deadline: %q, %v", line, err)
+	}
+	if back, err := typed("after"); err != nil || back != "after" {
+		t.Errorf("the terminal did not outlive the read deadline: %q, %v", back, err)
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/retransmit/docker-mobile/agent/internal/auth"
 	"github.com/retransmit/docker-mobile/agent/internal/pairing"
@@ -19,8 +18,6 @@ import (
 const (
 	// maxPairBody is far more than a pairing request needs.
 	maxPairBody = 4 << 10
-	// pairBodyTimeout is how long a pairing request may take to arrive.
-	pairBodyTimeout = 10 * time.Second
 	// proofLen is the length of a proof: one HMAC-SHA256 output.
 	proofLen = sha256.Size
 )
@@ -65,13 +62,12 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 		auth.WriteError(w, http.StatusTooManyRequests, "Too many failed attempts from this address")
 		return
 	}
-	// A stranger may call this, so the body must arrive promptly: without a
-	// deadline a slow sender could hold the connection open for ever.
-	rc := http.NewResponseController(w)
-	rc.SetReadDeadline(time.Now().Add(pairBodyTimeout))
+	// A stranger may call this, so the body must arrive promptly. The read
+	// deadline that every request starts under sees to that, and nothing
+	// here lifts it: it has to hold until the answer is written, because
+	// net/http reads the rest of the body before it sends the answer.
 	var req pairRequest
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPairBody))
-	rc.SetReadDeadline(time.Time{})
 	if err != nil || json.Unmarshal(body, &req) != nil || req.V != 1 {
 		auth.WriteError(w, http.StatusBadRequest, "malformed pairing request")
 		return
