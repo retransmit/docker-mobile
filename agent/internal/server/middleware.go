@@ -90,30 +90,40 @@ func noteCaller(r *http.Request, dev state.Device) {
 	}
 }
 
-// accessLog writes one line per finished request. It never logs a query
-// string, a header or a body. The health check is not logged.
+// accessLog writes one line per request, when it is over. It never logs a
+// query string, a header or a body. The health check is not logged: that is
+// GET or HEAD on /healthz, and nothing else on that path.
 func accessLog(log *slog.Logger, now func() time.Time, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
+		if r.URL.Path == "/healthz" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			next.ServeHTTP(w, r)
 			return
 		}
 		start := now()
 		info := &requestInfo{}
 		sw := &statusWriter{ResponseWriter: w}
+		// The line is written however the handler ends. The proxy ends a stream
+		// that was cut off with a panic (http.ErrAbortHandler); that panic goes
+		// on after the line, with the value it came with.
+		defer func() {
+			panicked := recover()
+			info.mu.Lock()
+			dev := info.device
+			info.mu.Unlock()
+			log.Info("request",
+				"device", dev.ID,
+				"name", dev.Name,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", sw.code(),
+				"bytes", sw.bytes,
+				"ms", now().Sub(start).Milliseconds(),
+			)
+			if panicked != nil {
+				panic(panicked)
+			}
+		}()
 		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), infoKey{}, info)))
-		info.mu.Lock()
-		dev := info.device
-		info.mu.Unlock()
-		log.Info("request",
-			"device", dev.ID,
-			"name", dev.Name,
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", sw.code(),
-			"bytes", sw.bytes,
-			"ms", now().Sub(start).Milliseconds(),
-		)
 	})
 }
 
@@ -175,7 +185,8 @@ func (w *statusWriter) code() int {
 }
 
 // failureLog reports failed authentications, at most one line a second per
-// source address.
+// source as the throttle counts it: an address, or a network for IPv6. The
+// line names the address itself.
 type failureLog struct {
 	log *slog.Logger
 	now func() time.Time
@@ -204,5 +215,14 @@ func (f *failureLog) note(remoteAddr string) {
 	}
 	f.last[key] = now
 	f.mu.Unlock()
-	f.log.Warn("authentication failed", "from", key)
+	f.log.Warn("authentication failed", "from", remoteHost(remoteAddr))
+}
+
+// remoteHost is the address a request came from, without its port.
+func remoteHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
 }

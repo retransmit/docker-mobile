@@ -399,6 +399,8 @@ func TestMalformedPairingRequestsAreRefused(t *testing.T) {
 		"bad base64":    `{"v":1,"nonce":"***","proof":"` + ok + `"}`,
 		"padded base64": `{"v":1,"nonce":"` + ok + `=","proof":"` + ok + `"}`,
 		"no proof":      `{"v":1,"nonce":"` + ok + `","proof":""}`,
+		"short proof":   `{"v":1,"nonce":"` + ok + `","proof":"` + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 31)) + `"}`,
+		"long proof":    `{"v":1,"nonce":"` + ok + `","proof":"` + base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 33)) + `"}`,
 		"huge":          `{"v":1,"name":"` + strings.Repeat("x", maxPairBody) + `"}`,
 	} {
 		rec := f.do("POST", "/agent/v1/pair", "", strings.NewReader(body))
@@ -433,5 +435,210 @@ func TestPairingWithoutACertificateBindsToAnEmptyFingerprint(t *testing.T) {
 	p, _, _ := f.pairing.Start(state.RoleFull, "")
 	if rec, _ := f.pair(t, p.Code, nil, "x"); rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", rec.Code)
+	}
+}
+
+func TestAskingWhileNothingIsPendingCountsAgainstTheAddress(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	// A well-formed request with a proof that fits no code.
+	filler := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	poll := func() *httptest.ResponseRecorder {
+		return f.do("POST", "/agent/v1/pair", "", strings.NewReader(`{"v":1,"nonce":"`+filler+`","proof":"`+filler+`"}`))
+	}
+	for i := 0; i < throttle.Threshold; i++ {
+		if rec := poll(); rec.Code != http.StatusNotFound {
+			t.Fatalf("poll %d: code = %d, want 404", i+1, rec.Code)
+		}
+	}
+	rec := poll()
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "60" {
+		t.Fatalf("a poll past the threshold: %d, Retry-After %q, want 429 and 60", rec.Code, rec.Header().Get("Retry-After"))
+	}
+	if !strings.Contains(f.log.String(), "authentication failed") {
+		t.Fatalf("the polls were not noted: %s", f.log.String())
+	}
+	// A pairing that starts now is out of the poller's reach: a blocked
+	// address is turned away before its proof is looked at, so no try is used.
+	p, _, _ := f.pairing.Start(state.RoleFull, "")
+	for i := 0; i < pairing.MaxTries; i++ {
+		if rec := poll(); rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("blocked poll %d: code = %d, want 429", i+1, rec.Code)
+		}
+	}
+	f.clock.advance(time.Minute)
+	if rec, _ := f.pair(t, p.Code, agentFP, "x"); rec.Code != http.StatusOK {
+		t.Fatalf("the pairing did not outlast the polls: code = %d, want 200", rec.Code)
+	}
+}
+
+func TestARequestThatIsCutOffStillGetsItsAccessLine(t *testing.T) {
+	var log bytes.Buffer
+	c := &clock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}
+	cutOff := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		noteCaller(r, state.Device{ID: "abcd1234", Name: "Pixel 8"})
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write([]byte("first\n"))
+		// What the proxy does when a stream ends before the daemon is done.
+		panic(http.ErrAbortHandler)
+	})
+	h := accessLog(slog.New(slog.NewTextHandler(&log, nil)), c.now, cutOff)
+	var got any
+	func() {
+		defer func() { got = recover() }()
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/containers/abc/logs?follow=1", nil))
+	}()
+	if got != http.ErrAbortHandler {
+		t.Fatalf("the panic arrived as %v, want http.ErrAbortHandler itself", got)
+	}
+	if n := strings.Count(log.String(), "msg=request"); n != 1 {
+		t.Fatalf("%d access lines for a request that was cut off, want 1: %s", n, log.String())
+	}
+	for _, want := range []string{"device=abcd1234", `name="Pixel 8"`, "method=GET", "path=/containers/abc/logs", "status=206", "bytes=6"} {
+		if !strings.Contains(log.String(), want) {
+			t.Errorf("log line lacks %s: %s", want, log.String())
+		}
+	}
+}
+
+func TestOnlyTheHealthCheckItselfGoesUnlogged(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	dev, token, _ := f.devices.Add("phone", state.RoleFull)
+	for _, method := range []string{"GET", "HEAD"} {
+		if rec := f.do(method, "/healthz", "", nil); rec.Code != http.StatusOK {
+			t.Fatalf("%s /healthz: code = %d, want 200", method, rec.Code)
+		}
+	}
+	if f.log.Len() != 0 {
+		t.Fatalf("the health check was logged: %s", f.log.String())
+	}
+	// Another method on that path is not the health check: with a credential
+	// it goes on to the daemon like any other request.
+	f.do("POST", "/healthz", token, nil)
+	line := f.log.String()
+	for _, want := range []string{"msg=request", "device=" + dev.ID, "method=POST", "path=/healthz"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line lacks %s: %s", want, line)
+		}
+	}
+}
+
+func TestAProofOfTheWrongLengthUsesUpNothing(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	p, _, _ := f.pairing.Start(state.RoleFull, "")
+	nonce := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, pairing.NonceLen))
+	// More of them than a pairing has tries, and than an address may fail.
+	for i := 0; i < throttle.Threshold; i++ {
+		for _, n := range []int{31, 33} {
+			proof := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{2}, n))
+			rec := f.do("POST", "/agent/v1/pair", "", strings.NewReader(`{"v":1,"nonce":"`+nonce+`","proof":"`+proof+`"}`))
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("a proof of %d bytes: code = %d, want 400", n, rec.Code)
+			}
+		}
+	}
+	if strings.Contains(f.log.String(), "authentication failed") {
+		t.Fatalf("a malformed request was noted as a failed attempt: %s", f.log.String())
+	}
+	if rec, _ := f.pair(t, p.Code, agentFP, "x"); rec.Code != http.StatusOK {
+		t.Fatalf("the pairing did not outlast the malformed proofs: code = %d, want 200", rec.Code)
+	}
+}
+
+// requiredOptions is the least New accepts: every option it may be left
+// without is left out.
+func requiredOptions(t *testing.T) Options {
+	t.Helper()
+	dir, err := state.Open(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices, err := state.LoadDevices(dir, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Options{
+		DockerHost: "tcp://127.0.0.1:1",
+		Devices:    devices,
+		Pairing:    pairing.NewManager(time.Now, rand.Reader),
+		Limiter:    throttle.New(time.Now),
+	}
+}
+
+func TestNewNamesTheRequiredOptionThatIsMissing(t *testing.T) {
+	for name, without := range map[string]func(*Options){
+		"Devices": func(o *Options) { o.Devices = nil },
+		"Pairing": func(o *Options) { o.Pairing = nil },
+		"Limiter": func(o *Options) { o.Limiter = nil },
+	} {
+		o := requiredOptions(t)
+		without(&o)
+		h, err := New(o)
+		if err == nil || h != nil {
+			t.Errorf("New without %s built a handler", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("New without %s: the error does not name it: %v", name, err)
+		}
+	}
+	// With several missing, the first one is named.
+	if _, err := New(Options{DockerHost: "tcp://127.0.0.1:1"}); err == nil || !strings.Contains(err.Error(), "Devices") {
+		t.Errorf("New with nothing but a Docker host: error = %v, want one that names Devices", err)
+	}
+}
+
+func TestAHandlerWorksWithTheRequiredOptionsAlone(t *testing.T) {
+	o := requiredOptions(t)
+	h, err := New(o)
+	if err != nil {
+		t.Fatalf("New with the required options alone: %v", err)
+	}
+	do := func(method, path, token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	dev, token, _ := o.Devices.Add("phone", state.RoleReadOnly)
+	if rec := do("GET", "/agent/v1/whoami", token, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), dev.ID) {
+		t.Fatalf("whoami: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := do("GET", "/agent/v1/whoami", "wrong", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong token: code = %d, want 401", rec.Code)
+	}
+	filler := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+	if rec := do("POST", "/agent/v1/pair", "", `{"v":1,"nonce":"`+filler+`","proof":"`+filler+`"}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("pairing with nothing pending: code = %d, want 404", rec.Code)
+	}
+}
+
+func TestTheFailureWarningNamesTheAddressItself(t *testing.T) {
+	f := newFixture(t, legacy, agentFP)
+	fail := func(remoteAddr string) {
+		req := httptest.NewRequest("GET", "/containers/json", nil)
+		req.RemoteAddr = remoteAddr
+		req.Header.Set("Authorization", "Bearer wrong")
+		f.handler.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	fail("[2001:db8:1:2::7]:50000")
+	if !strings.Contains(f.log.String(), "from=2001:db8:1:2::7\n") {
+		t.Fatalf("the warning does not name the address: %s", f.log.String())
+	}
+	// Failures are counted per network, and so is the limit on the warning:
+	// a neighbour in the same network gets no line of its own within the second.
+	fail("[2001:db8:1:2::8]:50000")
+	if n := strings.Count(f.log.String(), "authentication failed"); n != 1 {
+		t.Fatalf("%d failure lines within a second for one network, want 1", n)
+	}
+	f.clock.advance(time.Second)
+	fail("[2001:db8:1:2::8]:50000")
+	if !strings.Contains(f.log.String(), "from=2001:db8:1:2::8\n") {
+		t.Fatalf("the second warning does not name its address: %s", f.log.String())
+	}
+	if strings.Contains(f.log.String(), "/64") {
+		t.Fatalf("a warning names a network instead of an address: %s", f.log.String())
 	}
 }

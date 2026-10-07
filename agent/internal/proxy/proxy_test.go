@@ -107,9 +107,13 @@ func TestProxyStreamsIncrementally(t *testing.T) {
 }
 
 func TestTheBearerTokenIsNotForwarded(t *testing.T) {
-	var got http.Header
+	// The daemon's goroutine hands what it saw to the test over a channel.
+	seen := make(chan http.Header, 1)
 	daemon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got = r.Header.Clone()
+		select {
+		case seen <- r.Header.Clone():
+		default:
+		}
 		w.Write([]byte("{}"))
 	}))
 	defer daemon.Close()
@@ -121,6 +125,12 @@ func TestTheBearerTokenIsNotForwarded(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer dm1.abcd1234.secret")
 	req.Header.Set("X-Registry-Auth", "registry-credentials")
 	h.ServeHTTP(httptest.NewRecorder(), req)
+	var got http.Header
+	select {
+	case got = <-seen:
+	default:
+		t.Fatal("the request never reached the daemon")
+	}
 	if got.Get("Authorization") != "" {
 		t.Fatalf("the daemon saw Authorization: %q", got.Get("Authorization"))
 	}

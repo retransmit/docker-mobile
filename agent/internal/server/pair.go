@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,8 @@ const (
 	maxPairBody = 4 << 10
 	// pairBodyTimeout is how long a pairing request may take to arrive.
 	pairBodyTimeout = 10 * time.Second
+	// proofLen is the length of a proof: one HMAC-SHA256 output.
+	proofLen = sha256.Size
 )
 
 type pairRequest struct {
@@ -75,13 +78,20 @@ func (s *server) handlePair(w http.ResponseWriter, r *http.Request) {
 	}
 	nonce, errN := base64.RawURLEncoding.DecodeString(req.Nonce)
 	proof, errP := base64.RawURLEncoding.DecodeString(req.Proof)
-	if errN != nil || errP != nil || len(nonce) != pairing.NonceLen || len(proof) == 0 {
+	// A nonce or a proof of another length cannot be right. It is refused as
+	// malformed here, so it neither uses up a try nor counts as a failure.
+	if errN != nil || errP != nil || len(nonce) != pairing.NonceLen || len(proof) != proofLen {
 		auth.WriteError(w, http.StatusBadRequest, "malformed pairing request")
 		return
 	}
 	got, err := s.o.Pairing.Redeem(s.o.Fingerprint, nonce, proof, req.Name, s.o.Devices.Add)
 	switch {
 	case errors.Is(err, pairing.ErrNone):
+		// This answer costs the agent nothing, so it has to cost the asker:
+		// otherwise a stranger could ask without end, see the moment a pairing
+		// starts and use up its tries.
+		s.o.Limiter.Fail(key)
+		s.failures.note(r.RemoteAddr)
 		auth.WriteError(w, http.StatusNotFound, "No pairing is in progress on this agent")
 		return
 	case errors.Is(err, pairing.ErrWrongProof):

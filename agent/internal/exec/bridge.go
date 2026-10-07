@@ -4,6 +4,7 @@ package exec
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -17,12 +18,19 @@ import (
 )
 
 // startExecHijack dials the Docker daemon and starts the given exec with a TTY,
-// hijacking the connection into a raw bidirectional stream.
+// hijacking the connection into a raw bidirectional stream. It gives up, with
+// an error, when ctx ends before the daemon has answered.
 func startExecHijack(ctx context.Context, dial dockerhost.DialFunc, execID string) (net.Conn, error) {
 	conn, err := dial(ctx, "tcp", "docker")
 	if err != nil {
 		return nil, fmt.Errorf("dial docker: %w", err)
 	}
+	// A daemon that accepts the connection and then says nothing would keep
+	// the write and the reads below waiting for ever. Closing the connection
+	// when the context ends is what makes them return. Once this function has
+	// returned the connection is the caller's to watch.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
 	const body = `{"Detach":false,"Tty":true}`
 	req := "POST /exec/" + execID + "/start HTTP/1.1\r\n" +
 		"Host: docker\r\n" +
@@ -79,8 +87,27 @@ type bufferedConn struct {
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+// maxExecIDLen is the length of the ids the daemon gives out.
+const maxExecIDLen = 64
+
+// validExecID reports whether id can be an exec id: 1 to 64 hexadecimal
+// characters, and so nothing that would end the request line it is put into.
+func validExecID(id string) bool {
+	if len(id) == 0 || len(id) > maxExecIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 // NewHandler returns a handler that upgrades the request to a WebSocket and
-// bridges it to a hijacked exec stream on the daemon at dockerHost.
+// bridges it to a hijacked exec stream on the daemon at dockerHost. The exec
+// is named by the path value "id"; one that cannot be an exec id gets a 400.
 func NewHandler(dockerHost string) (http.Handler, error) {
 	dial, _, err := dockerhost.DialContextFor(dockerHost)
 	if err != nil {
@@ -93,6 +120,15 @@ func NewHandler(dockerHost string) (http.Handler, error) {
 	upgrader := websocket.Upgrader{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		execID := r.PathValue("id")
+		// The id becomes part of the request line written to the daemon, and
+		// it arrives here with its percent-escapes decoded. Anything that is
+		// not an id is refused before the connection is taken over.
+		if !validExecID(execID) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"message": "The terminal id is not valid"})
+			return
+		}
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return // Upgrade already wrote an error response
