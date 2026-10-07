@@ -59,7 +59,9 @@ type PairRequest struct {
 }
 
 // Event names. A pairing stream is one "started" event followed by exactly
-// one of the others.
+// one of the others. When the request ends before its pairing does, the
+// stream breaks off after "started", unless a phone was paired in that very
+// moment: then "paired" still follows.
 const (
 	EventStarted = "started"
 )
@@ -293,9 +295,10 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		s.Pairing.Expire(p.ID)
 		result = <-done
 	case <-r.Context().Done():
-		// The command line went away: the code must not stay usable. The
-		// pairing may have ended a moment before, even with a device stored,
-		// and Cancel then changes nothing. So the result is read, not assumed.
+		// The request is over: the command line went away, or the agent is
+		// stopping. Either way the code must not stay usable. The pairing may
+		// have ended a moment before, even with a device stored, and Cancel
+		// then changes nothing. So the result is read, not assumed.
 		s.Pairing.Cancel(p.ID)
 		result = <-done
 		left = true
@@ -305,11 +308,15 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.logf("pairing ended", "outcome", string(result.Outcome))
 	}
-	if left {
+	if left && result.Outcome != pairing.Paired {
 		// No ending event: the request is over, so the stream just breaks
 		// off after "started".
 		return
 	}
+	// A phone that was paired is reported also when the request is over. A
+	// command line that waits while the agent stops is still reading, and
+	// has to learn that a phone holds a token now. To one that has gone
+	// away the write fails, and nothing is lost by that.
 	e := Event{Event: string(result.Outcome), Error: result.Err}
 	if result.Outcome == pairing.Paired {
 		info := infoOf(result.Device)
@@ -353,7 +360,12 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The device is back in the list and none of its requests was
 		// closed. The answer says that first: the cause alone names a file,
-		// and reads as if the phone were gone.
+		// and reads as if the phone were gone. The log gets a warning with
+		// the device and the cause: a pairing that could not be stored has
+		// its line there too.
+		if s.Log != nil {
+			s.Log.Warn("device not revoked", "device", id, "error", err.Error())
+		}
 		writeJSON(w, http.StatusInternalServerError, errorResponse{"the device is still paired and its connections stay open: the removal could not be stored: " + err.Error()})
 		return
 	}

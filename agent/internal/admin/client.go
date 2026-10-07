@@ -104,9 +104,11 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 // Once the event that ends the pairing has been handed to onEvent, Pair
 // returns nil, whatever has become of ctx by then: how the pairing ended is
 // known, and a phone that was paired stays paired. An error therefore means
-// that the pairing did not begin, or that the caller did not see it end:
-// then it is the error of ctx when ctx ended first, and ErrStopped when the
-// stream broke off.
+// that the pairing did not begin, or that the caller did not see it end.
+// Where it began, that is the error of ctx when ctx ended first, ErrStopped
+// when the stream broke off, and an error of its own, "unreadable answer
+// from the agent", when a line of the stream is not JSON that reads as an
+// event.
 func (c *Client) Pair(ctx context.Context, req PairRequest, onEvent func(Event)) error {
 	resp, err := c.do(ctx, http.MethodPost, "/pair", req)
 	if err != nil {

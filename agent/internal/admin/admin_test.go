@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -474,6 +475,12 @@ func TestRevokeSaysTheDeviceIsStillPairedWhenTheRemovalCannotBeStored(t *testing
 			t.Errorf("the error does not say %q: %v", want, err)
 		}
 	}
+	// The agent's log has it too: one warning, with the device and the
+	// cause and nothing else.
+	warning := regexp.MustCompile(`(?m)^time=\S+ level=WARN msg="device not revoked" device=` + dev.ID + ` error="write devices\.json: .*"$`)
+	if log := f.log.String(); strings.Count(log, "level=WARN") != 1 || !warning.MatchString(log) {
+		t.Errorf("the log does not have the one warning that the device was not revoked:\n%s", log)
+	}
 	// And so it is: the device works as before and its request is open.
 	if _, ok := devices.Authenticate(token); !ok {
 		t.Fatal("the device no longer authenticates")
@@ -925,6 +932,20 @@ func TestTheLogSaysPairedWhenTheCommandLeavesWhileThePhoneRedeems(t *testing.T) 
 	}
 	if list := f.devices.List(); len(list) != 1 || list[0].ID != got.device.ID {
 		t.Fatalf("devices = %+v, want the one that was paired", list)
+	}
+	// The answer says so as well. A command that is still there to read it,
+	// as it is when the agent is the one that stops, learns of the phone.
+	select {
+	case line := <-w.lines:
+		var last Event
+		if err := json.Unmarshal(line, &last); err != nil {
+			t.Fatalf("the last line of the answer is not an event: %v", err)
+		}
+		if last.Event != "paired" || last.Device == nil || last.Device.ID != got.device.ID {
+			t.Fatalf("the answer ends with the event %q, want paired with device %s", last.Event, got.device.ID)
+		}
+	default:
+		t.Fatal("the answer ends without saying that a phone was paired")
 	}
 	log := f.log.String()
 	if strings.Contains(log, "outcome=cancelled") {

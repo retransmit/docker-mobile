@@ -68,12 +68,18 @@ func exited(t *testing.T, exit <-chan int) int {
 // test guesses of the code against, and must not get to choose how long.
 const pairTimeout = 5 * time.Second
 
-// pair runs the proof exchange with a typed code.
+// maxPairAnswer is the most the phone reads of an answer to its pairing
+// request. What an agent answers is a few hundred bytes.
+const maxPairAnswer = 4 << 10
+
+// pair runs the proof exchange with a typed code, and gives it pairTimeout.
 func (p *phone) pair(code, name string) (status int, err error) {
-	return p.pairWithin(pairTimeout, code, name)
+	ctx, cancel := context.WithTimeout(context.Background(), pairTimeout)
+	defer cancel()
+	return p.pairContext(ctx, code, name)
 }
 
-// pairWithin is pair with the time the whole attempt may take.
+// pairContext is one pairing attempt. It is over when ctx is.
 //
 // A proof is good for one certificate. It must therefore travel on a
 // connection that presented that certificate and no other: a proof made for
@@ -85,34 +91,39 @@ func (p *phone) pair(code, name string) (status int, err error) {
 // its handshake before anything is sent on it.
 //
 // Nothing is kept unless the answer proves that the server holds the code
-// too. Whenever the attempt does not end that way the phone is left as it
-// was: without a token, and with the pin it had before or none.
-func (p *phone) pairWithin(limit time.Duration, code, name string) (status int, err error) {
+// too, and brings a token. Whenever the attempt does not end that way the
+// phone is left as it was: without a token, and with the pin it had before
+// or none.
+//
+// The phone goes where it was sent and takes what it asked for, no more: it
+// follows no redirect, and it reads no answer that is larger than a pairing
+// answer can be.
+func (p *phone) pairContext(ctx context.Context, code, name string) (status int, err error) {
 	canonical, ok := pairing.Normalize(code)
 	if !ok {
 		return 0, fmt.Errorf("bad code %q", code)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
-	defer cancel()
-
-	before, paired := p.pin, false
+	before, paired := p.trusted(), false
 	defer func() {
 		if !paired {
-			p.pin = before
+			p.trust(before)
 		}
 	}()
 	var fp []byte
 	if p.scheme == "https" {
-		probe, err := p.doWithin(ctx, http.MethodGet, "/healthz", nil)
+		probe, err := p.ask(ctx, http.MethodGet, "/healthz", nil)
 		if err != nil {
 			return 0, err
 		}
 		probe.Body.Close()
-		// A copy: every later handshake writes to p.seen, also one that the
-		// pin then refuses.
-		presented := p.seen
-		p.pin = &presented
-		fp = presented[:]
+		if isRedirect(probe.StatusCode) {
+			return 0, fmt.Errorf("the server answered the first request of the pairing with a redirect (%d)", probe.StatusCode)
+		}
+		// A copy of its own: every later handshake changes what the phone
+		// has seen last, also one that the pin then refuses.
+		first := p.presented()
+		p.trust(&first)
+		fp = first[:]
 	}
 	nonce := make([]byte, pairing.NonceLen)
 	rand.Read(nonce)
@@ -122,18 +133,26 @@ func (p *phone) pairWithin(limit time.Duration, code, name string) (status int, 
 		"proof": base64.RawURLEncoding.EncodeToString(pairing.PhoneProof(canonical, fp, nonce)),
 		"name":  name,
 	})
-	resp, err := p.doWithin(ctx, http.MethodPost, "/agent/v1/pair", body)
+	resp, err := p.ask(ctx, http.MethodPost, "/agent/v1/pair", body)
 	if err != nil {
 		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		// A redirect is among these, and ends the attempt like the others.
 		return resp.StatusCode, nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxPairAnswer+1))
+	if err != nil {
+		return 0, err
+	}
+	if len(raw) > maxPairAnswer {
+		return 0, fmt.Errorf("the server's answer is too large for a pairing answer: more than %d bytes", maxPairAnswer)
 	}
 	var got struct {
 		Nonce, Proof, Token string
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+	if err := json.Unmarshal(raw, &got); err != nil {
 		return 0, err
 	}
 	// The lengths come first: the proof is computed over the two nonces one
@@ -144,6 +163,9 @@ func (p *phone) pairWithin(limit time.Duration, code, name string) (status int, 
 	if errNonce != nil || errProof != nil || len(agentNonce) != pairing.NonceLen || len(proof) != sha256.Size {
 		return 0, errors.New("the server's answer is malformed: its nonce or its proof is not 32 bytes")
 	}
+	if got.Token == "" {
+		return 0, errors.New("the server's answer is malformed: it holds no token")
+	}
 	if !hmac.Equal(proof, pairing.AgentProof(canonical, fp, nonce, agentNonce)) {
 		return 0, errors.New("the server could not prove it holds the code")
 	}
@@ -152,6 +174,27 @@ func (p *phone) pairWithin(limit time.Duration, code, name string) (status int, 
 	p.token = got.Token
 	return http.StatusOK, nil
 }
+
+// ask sends one request of a pairing attempt. It is the phone's ordinary
+// request but for one thing: it follows no redirect, and hands back the
+// answer that asks for one as it is. Where a phone takes its proof is for
+// its owner to say, who typed or scanned the address, and not for whoever
+// answers there.
+func (p *phone) ask(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	req, err := p.request(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	straight := &http.Client{
+		Transport:     p.client.Transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	return straight.Do(req)
+}
+
+// isRedirect reports whether status is one of those that send the asker
+// somewhere else.
+func isRedirect(status int) bool { return status >= 300 && status < 400 }
 
 // pairWithLink is the QR path: the fingerprint comes from the link, and the
 // phone refuses any other certificate from the first byte on. A pin from a
@@ -162,7 +205,7 @@ func (p *phone) pairWithLink(link, name string) (int, error) {
 		return 0, err
 	}
 	q := u.Query()
-	before := p.pin
+	before := p.trusted()
 	if f := q.Get("f"); f != "" {
 		raw, err := base64.RawURLEncoding.DecodeString(f)
 		if err != nil || len(raw) != 32 {
@@ -170,11 +213,11 @@ func (p *phone) pairWithLink(link, name string) (int, error) {
 		}
 		var pin tlsid.Fingerprint
 		copy(pin[:], raw)
-		p.pin = &pin
+		p.trust(&pin)
 	}
 	status, err := p.pair(q.Get("c"), name)
 	if err != nil || status != http.StatusOK {
-		p.pin = before
+		p.trust(before)
 	}
 	return status, err
 }
@@ -221,7 +264,7 @@ func TestPairUseAndRevokeOverTLS(t *testing.T) {
 	if !strings.Contains(out2.String(), "Paired: kitchen tablet") || !strings.Contains(out2.String(), "full control") {
 		t.Fatalf("pair output: %s", out2.String())
 	}
-	if *full.pin != a.fingerprint() {
+	if *full.trusted() != a.fingerprint() {
 		t.Fatal("the phone pinned something other than the agent's fingerprint")
 	}
 	if got := full.status("POST", "/containers/x/start"); got != http.StatusOK {
@@ -322,7 +365,7 @@ func TestSomeoneInTheMiddleCannotPair(t *testing.T) {
 	if status != http.StatusForbidden {
 		t.Fatalf("the agent answered %d to a relayed proof, want 403", status)
 	}
-	if victim.token != "" || victim.pin != nil {
+	if victim.token != "" || victim.trusted() != nil {
 		t.Fatal("the phone trusted the attacker")
 	}
 	if _, list, _ := a.command("devices"); !strings.Contains(list, "No phone is paired") {
@@ -425,7 +468,7 @@ func TestARelayThatOnlyTerminatesTheProofConnectionGetsNothing(t *testing.T) {
 	if status, err := victim.pair(code, "Pixel 8"); err == nil || !strings.Contains(err.Error(), "server identity changed") {
 		t.Errorf("status %d, err = %v, want the phone to refuse the connection that presents another certificate", status, err)
 	}
-	if victim.token != "" || victim.pin != nil {
+	if victim.token != "" || victim.trusted() != nil {
 		t.Error("the phone kept a token or a pin from the attempt through the relay")
 	}
 	if got := reached.String(); got != "" {
@@ -448,42 +491,89 @@ func TestARelayThatOnlyTerminatesTheProofConnectionGetsNothing(t *testing.T) {
 	}
 }
 
-// impostor is a server with a certificate of its own that answers a pairing
-// request itself, with the nonce and the proof that answer returns for the
-// phone's nonce and the fingerprint of the impostor's own certificate. It
-// returns the address it listens on.
-func impostor(t *testing.T, answer func(phoneNonce, fingerprint []byte) (nonce, proof []byte)) string {
+// serveTLS serves handler over TLS with cert until the test ends and returns
+// the address. It reports nothing: a handshake that a phone refuses is what
+// some of the tests are about.
+func serveTLS(t *testing.T, cert tls.Certificate, handler http.Handler) string {
 	t.Helper()
-	cert := strangerCert(t)
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsid.ServerConfig(cert))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: handler, ErrorLog: log.New(io.Discard, "", 0)}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+	return ln.Addr().String()
+}
+
+// fingerprintOf is the fingerprint a phone sees when a server presents cert.
+func fingerprintOf(t *testing.T, cert tls.Certificate) []byte {
+	t.Helper()
 	fp, err := tlsid.FingerprintOf(cert)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
-	mux.HandleFunc("POST /agent/v1/pair", func(w http.ResponseWriter, r *http.Request) {
+	return fp[:]
+}
+
+// healthy answers the probe the way an agent does.
+func healthy(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) }
+
+// madeUpToken has the form of a device token and belongs to no device.
+var madeUpToken = "dm1.0badc0de." + strings.Repeat("A", 43)
+
+// reply is what a server that is not the agent answers a pairing request
+// with.
+type reply struct {
+	nonce, proof []byte
+	token        string
+	padding      int // the size of a field no pairing answer has, in bytes
+}
+
+// rightReply is the answer of a server that holds code: its proof is good
+// for the phone's nonce, for the nonce in the answer and for the certificate
+// that has fingerprint.
+func rightReply(code string, phoneNonce, fingerprint []byte) reply {
+	nonce := make([]byte, pairing.NonceLen)
+	rand.Read(nonce)
+	return reply{nonce: nonce, proof: pairing.AgentProof(code, fingerprint, phoneNonce, nonce), token: madeUpToken}
+}
+
+// answerPairing answers a pairing request with what answer returns for the
+// phone's nonce and fingerprint, the fingerprint of the server's own
+// certificate.
+func answerPairing(fingerprint []byte, answer func(phoneNonce, fingerprint []byte) reply) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Nonce string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "malformed", http.StatusBadRequest)
 			return
 		}
 		phoneNonce, _ := base64.RawURLEncoding.DecodeString(req.Nonce)
-		nonce, proof := answer(phoneNonce, fp[:])
+		a := answer(phoneNonce, fingerprint)
+		fields := map[string]string{
+			"nonce": base64.RawURLEncoding.EncodeToString(a.nonce),
+			"proof": base64.RawURLEncoding.EncodeToString(a.proof),
+			"token": a.token,
+		}
+		if a.padding > 0 {
+			fields["padding"] = strings.Repeat("x", a.padding)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
-			"nonce": base64.RawURLEncoding.EncodeToString(nonce),
-			"proof": base64.RawURLEncoding.EncodeToString(proof),
-			"token": "dm1.0badc0de." + strings.Repeat("A", 43),
-		})
-	})
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsid.ServerConfig(cert))
-	if err != nil {
-		t.Fatal(err)
+		json.NewEncoder(w).Encode(fields)
 	}
-	srv := &http.Server{Handler: mux, ErrorLog: log.New(io.Discard, "", 0)}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-	return ln.Addr().String()
+}
+
+// impostor is a server with a certificate of its own that answers the probe
+// as an agent does and a pairing request itself, with what answer returns.
+// It returns the address it listens on.
+func impostor(t *testing.T, answer func(phoneNonce, fingerprint []byte) reply) string {
+	t.Helper()
+	cert := strangerCert(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", healthy)
+	mux.HandleFunc("POST /agent/v1/pair", answerPairing(fingerprintOf(t, cert), answer))
+	return serveTLS(t, cert, mux)
 }
 
 // someCode is a pairing code that no agent has issued.
@@ -499,17 +589,17 @@ func someCode(t *testing.T) string {
 func TestAPhoneRefusesAnAnswerItCannotVerify(t *testing.T) {
 	// Whoever terminates the phone's connection can answer the pairing
 	// request with anything. Without the code it cannot make the proof.
-	addr := impostor(t, func(_, _ []byte) (nonce, proof []byte) {
-		nonce, proof = make([]byte, pairing.NonceLen), make([]byte, sha256.Size)
+	addr := impostor(t, func(_, _ []byte) reply {
+		nonce, proof := make([]byte, pairing.NonceLen), make([]byte, sha256.Size)
 		rand.Read(nonce)
 		rand.Read(proof)
-		return nonce, proof
+		return reply{nonce: nonce, proof: proof, token: madeUpToken}
 	})
 	p := newPhone(t, "https", addr)
 	if status, err := p.pair(someCode(t), "Pixel 8"); err == nil || !strings.Contains(err.Error(), "could not prove it holds the code") {
 		t.Fatalf("status %d, err = %v, want the phone to refuse an answer it cannot verify", status, err)
 	}
-	if p.token != "" || p.pin != nil {
+	if p.token != "" || p.trusted() != nil {
 		t.Fatal("the phone kept a token or a pin from an answer it could not verify")
 	}
 }
@@ -532,15 +622,15 @@ func TestAPhoneRefusesAnAgentNonceOrProofOfTheWrongLength(t *testing.T) {
 		{"a proof one byte short", pairing.NonceLen, func(right []byte) []byte { return right[:len(right)-1] }, false},
 		{"a proof one byte long", pairing.NonceLen, func(right []byte) []byte { return append(right, 0) }, false},
 	} {
-		addr := impostor(t, func(phoneNonce, fingerprint []byte) (nonce, proof []byte) {
-			nonce = make([]byte, c.nonceLen)
+		addr := impostor(t, func(phoneNonce, fingerprint []byte) reply {
+			nonce := make([]byte, c.nonceLen)
 			rand.Read(nonce)
-			return nonce, c.proof(pairing.AgentProof(code, fingerprint, phoneNonce, nonce))
+			return reply{nonce: nonce, proof: c.proof(pairing.AgentProof(code, fingerprint, phoneNonce, nonce)), token: madeUpToken}
 		})
 		p := newPhone(t, "https", addr)
 		status, err := p.pair(code, "Pixel 8")
 		if c.accepted {
-			if err != nil || status != http.StatusOK || p.token == "" || p.pin == nil {
+			if err != nil || status != http.StatusOK || p.token == "" || p.trusted() == nil {
 				t.Errorf("%s: the phone did not pair: %d, %v", c.name, status, err)
 			}
 			continue
@@ -548,8 +638,100 @@ func TestAPhoneRefusesAnAgentNonceOrProofOfTheWrongLength(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not 32 bytes") {
 			t.Errorf("%s: status %d, err = %v, want the phone to refuse the answer for its form", c.name, status, err)
 		}
-		if p.token != "" || p.pin != nil {
+		if p.token != "" || p.trusted() != nil {
 			t.Errorf("%s: the phone kept a token or a pin", c.name)
+		}
+	}
+}
+
+func TestAPhoneRefusesAnAnswerThatIsTooLarge(t *testing.T) {
+	// The server holds the code and every field of its answer is right. The
+	// answer only carries far more than a pairing answer has to.
+	code := someCode(t)
+	addr := impostor(t, func(phoneNonce, fingerprint []byte) reply {
+		r := rightReply(code, phoneNonce, fingerprint)
+		r.padding = 2 * maxPairAnswer
+		return r
+	})
+	p := newPhone(t, "https", addr)
+	if status, err := p.pair(code, "Pixel 8"); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("status %d, err = %v, want the phone to refuse an answer of that size", status, err)
+	}
+	if p.token != "" || p.trusted() != nil {
+		t.Fatal("the phone kept a token or a pin from an answer that was too large")
+	}
+}
+
+func TestAPhoneRefusesAnAnswerWithoutAToken(t *testing.T) {
+	// The server holds the code and proves it. It only gives the phone
+	// nothing to come back with.
+	code := someCode(t)
+	addr := impostor(t, func(phoneNonce, fingerprint []byte) reply {
+		r := rightReply(code, phoneNonce, fingerprint)
+		r.token = ""
+		return r
+	})
+	p := newPhone(t, "https", addr)
+	if status, err := p.pair(code, "Pixel 8"); err == nil || !strings.Contains(err.Error(), "no token") {
+		t.Fatalf("status %d, err = %v, want the phone to refuse an answer without a token", status, err)
+	}
+	if p.token != "" || p.trusted() != nil {
+		t.Fatal("the phone kept a pin from an answer without a token")
+	}
+}
+
+func TestAPhoneFollowsNoRedirectWhilePairing(t *testing.T) {
+	// The server holds the code, and where it sends the phone the answers
+	// are the right ones: a phone that followed would end up paired.
+	code := someCode(t)
+	for _, c := range []struct {
+		name       string
+		redirected string // the request that is answered with a redirect
+		asked      string // all that the phone may ask of the server
+		status     int    // how the attempt ends: with this status,
+		fails      string // or with an error that says this
+	}{
+		{"the probe", "GET /healthz", "GET /healthz\n", 0, "redirect"},
+		{"the pairing request", "POST /agent/v1/pair", "GET /healthz\nPOST /agent/v1/pair\n", http.StatusTemporaryRedirect, ""},
+	} {
+		cert := strangerCert(t)
+		right := answerPairing(fingerprintOf(t, cert), func(phoneNonce, fingerprint []byte) reply {
+			return rightReply(code, phoneNonce, fingerprint)
+		})
+		// A 307 keeps method and body: whoever follows it sends the proof a
+		// second time, to where the answer points.
+		moved := func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/moved"+r.URL.Path, http.StatusTemporaryRedirect)
+		}
+		var asked syncBuf
+		mux := http.NewServeMux()
+		for pattern, handler := range map[string]http.HandlerFunc{
+			"GET /healthz":              healthy,
+			"POST /agent/v1/pair":       right,
+			"GET /moved/healthz":        healthy,
+			"POST /moved/agent/v1/pair": right,
+		} {
+			if pattern == c.redirected {
+				handler = moved
+			}
+			mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprintln(&asked, r.Method, r.URL.Path)
+				handler(w, r)
+			})
+		}
+		p := newPhone(t, "https", serveTLS(t, cert, mux))
+		status, err := p.pair(code, "Pixel 8")
+		if c.fails == "" && (err != nil || status != c.status) {
+			t.Errorf("%s was answered with a redirect, and the attempt ended with %d, %v, want the redirect's status %d", c.name, status, err, c.status)
+		}
+		if c.fails != "" && (err == nil || !strings.Contains(err.Error(), c.fails)) {
+			t.Errorf("%s was answered with a redirect, and the attempt ended with %d, %v, want an error about the %s", c.name, status, err, c.fails)
+		}
+		if p.token != "" || p.trusted() != nil {
+			t.Errorf("%s was answered with a redirect, and the phone kept a token or a pin", c.name)
+		}
+		if got := asked.String(); got != c.asked {
+			t.Errorf("%s was answered with a redirect, and the phone asked:\n%swant only:\n%s", c.name, got, c.asked)
 		}
 	}
 }
@@ -559,43 +741,41 @@ func TestAPhoneDoesNotWaitForEverForTheAnswer(t *testing.T) {
 	// long as the phone stays.
 	arrived := make(chan struct{})
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /healthz", healthy)
 	mux.HandleFunc("POST /agent/v1/pair", func(_ http.ResponseWriter, r *http.Request) {
 		close(arrived)
 		<-r.Context().Done()
 	})
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsid.ServerConfig(strangerCert(t)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &http.Server{Handler: mux, ErrorLog: log.New(io.Discard, "", 0)}
-	go srv.Serve(ln)
-	t.Cleanup(func() { srv.Close() })
-
-	p := newPhone(t, "https", ln.Addr().String())
+	p := newPhone(t, "https", serveTLS(t, strangerCert(t), mux))
 	code := someCode(t)
+	// When the phone's time is up is for the test to say, and it says so the
+	// moment the request is with the server: never while a connection is
+	// still being set up, however slow the machine.
+	ctx, timeIsUp := context.WithCancel(context.Background())
+	defer timeIsUp()
 	ended := make(chan error, 1)
 	go func() {
-		// A shorter limit than a phone sets, so that the test is quick, and
-		// still many times what it takes to get the request to the server.
-		_, err := p.pairWithin(time.Second, code, "Pixel 8")
+		_, err := p.pairContext(ctx, code, "Pixel 8")
 		ended <- err
 	}()
 	select {
+	case <-arrived:
 	case err := <-ended:
-		if !errors.Is(err, context.DeadlineExceeded) {
-			t.Fatalf("err = %v, want the attempt to run out of time", err)
+		t.Fatalf("the attempt ended before its request was with the server: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the pairing request did not reach the server")
+	}
+	timeIsUp()
+	select {
+	case err := <-ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want the attempt to end because its time is up", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the phone still waits for an answer")
 	}
-	select {
-	case <-arrived:
-	default:
-		t.Fatal("the attempt ran out of time before its request was with the server")
-	}
-	if p.token != "" || p.pin != nil {
-		t.Fatal("the phone kept a token or a pin from an attempt that ran out of time")
+	if p.token != "" || p.trusted() != nil {
+		t.Fatal("the phone kept a token or a pin from an attempt that ended without an answer")
 	}
 }
 
@@ -866,6 +1046,57 @@ func TestPairReportsHowThePairingEnded(t *testing.T) {
 	}
 }
 
+func TestWhatPairSaysWhenItIsOver(t *testing.T) {
+	const (
+		paired    = "Paired: Pixel 8 (id 0a1b2c3d, read-only)\n"
+		cancelled = `pairing cancelled; the code no longer works. If a phone used it in the same moment it is paired: check with "docker-mobile-agent devices"`
+		stopped   = `the agent stopped before the pairing ended; the code no longer works. If a phone used it in the same moment it is paired, and still is when the agent runs again: check then with "docker-mobile-agent devices"`
+	)
+	pixel := &admin.DeviceInfo{ID: "0a1b2c3d", Name: "Pixel 8", Role: "readonly"}
+	ended := func(event string) *admin.Event { return &admin.Event{Event: event} }
+	// What the client returns when the command is interrupted while it
+	// connects, and what it returns for a line that is not an event.
+	whileConnecting := fmt.Errorf(`Post "http://agent/pair": %w`, context.Canceled)
+	unreadable := errors.New("unreadable answer from the agent: unexpected end of JSON input")
+	for _, c := range []struct {
+		name   string
+		end    *admin.Event // the event that ended the pairing, if any
+		err    error        // what the client returned
+		shown  bool         // whether a code had been shown
+		stdout string
+		fails  string // what the command ends with; empty when it succeeds
+	}{
+		{"paired", &admin.Event{Event: "paired", Device: pixel}, nil, true, paired, ""},
+		{"paired, and interrupted in the same moment", &admin.Event{Event: "paired", Device: pixel}, context.Canceled, true, paired, ""},
+		{"paired, and the agent stopped in the same moment", &admin.Event{Event: "paired", Device: pixel}, admin.ErrStopped, true, paired, ""},
+		{"paired, without the device", ended("paired"), nil, true, "",
+			`the agent says a phone was paired, but not which one: look at "docker-mobile-agent devices"`},
+		{"expired", ended("expired"), nil, true, "", "the code expired before a phone used it; run pair again"},
+		{"expired, and interrupted in the same moment", ended("expired"), context.Canceled, true, "", "the code expired before a phone used it; run pair again"},
+		{"replaced", ended("replaced"), nil, true, "", "another pair command replaced this code"},
+		{"voided", ended("voided"), nil, true, "", "too many wrong attempts: the code was voided; run pair again"},
+		{"failed", &admin.Event{Event: "failed", Error: "write devices.json: no space left on device"}, nil, true, "",
+			"the phone proved the code but the agent could not store it: write devices.json: no space left on device"},
+		{"an event the command does not know", ended("exploded"), nil, true, "", `pairing ended as "exploded"`},
+		{"interrupted while it waited for the phone", nil, context.Canceled, true, "", cancelled},
+		{"interrupted before it had shown a code", nil, context.Canceled, false, "", "pairing cancelled before a code was shown"},
+		{"interrupted while it connected", nil, whileConnecting, false, "", "pairing cancelled before a code was shown"},
+		{"the agent stopped while the command waited for the phone", nil, admin.ErrStopped, true, "", stopped},
+		{"the agent stopped before the command had shown a code", nil, admin.ErrStopped, false, "", "the agent stopped before the pairing ended"},
+		{"no agent", nil, admin.ErrNotRunning, false, "", "the agent is not running on this state folder"},
+		{"an answer that cannot be read", nil, unreadable, true, "", "unreadable answer from the agent: unexpected end of JSON input"},
+	} {
+		stdout, err := pairEnding(c.end, c.err, c.shown)
+		fails := ""
+		if err != nil {
+			fails = err.Error()
+		}
+		if stdout != c.stdout || fails != c.fails {
+			t.Errorf("%s:\n  stdout %q\n  fails with %q\nwant\n  stdout %q\n  fails with %q", c.name, stdout, fails, c.stdout, c.fails)
+		}
+	}
+}
+
 func TestAPairingThatEndedIsReportedThoughTheCommandWasInterrupted(t *testing.T) {
 	// The whole pairing, its good end included, is in the agent's answer
 	// before the command has printed the code, and the command is interrupted
@@ -896,7 +1127,13 @@ func TestAnInterruptedPairClaimsOnlyWhatItKnows(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	})
-	ctx, cancel := context.WithCancel(context.Background())
+	// The interrupt comes when the command prints the words it is known to
+	// print. Should it ever print others, the command and the agent would
+	// wait for each other for good: so the command's time is limited, and
+	// the check below then fails on what it said.
+	limited, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	ctx, cancel := context.WithCancel(limited)
 	defer cancel()
 	out := &interrupted{interrupt: cancel}
 	var errOut bytes.Buffer

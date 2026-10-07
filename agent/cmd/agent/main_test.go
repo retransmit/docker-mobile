@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -123,16 +124,9 @@ func startAgent(t *testing.T, extra ...string) *agent {
 	// started after the probe, it would be the nearest contender for the
 	// port the probe has just given back.
 	docker := fakeDocker(t)
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	listen := probe.Addr().String()
-	probe.Close()
 
-	a := &agent{t: t, log: &syncBuf{}, done: make(chan error, 1), env: map[string]string{
+	a := &agent{t: t, log: &syncBuf{}, env: map[string]string{
 		"AGENT_DATA":      dataDir,
-		"AGENT_LISTEN":    listen,
 		"AGENT_ADVERTISE": "127.0.0.1",
 		"AGENT_NAME":      "test agent",
 		"DOCKER_HOST":     "tcp://" + docker.Listener.Addr().String(),
@@ -140,30 +134,66 @@ func startAgent(t *testing.T, extra ...string) *agent {
 	for i := 0; i+1 < len(extra); i += 2 {
 		a.env[extra[i]] = extra[i+1]
 	}
-	cfg, err := config.Load(a.getenv, false)
+	// An address the caller names is the one to use, and no other.
+	_, named := a.env["AGENT_LISTEN"]
+	for try := 1; ; try++ {
+		if !named {
+			a.env["AGENT_LISTEN"] = freeAddress(t)
+		}
+		cfg, err := config.Load(a.getenv, false)
+		if err != nil {
+			t.Fatalf("config: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		// Whatever happens below, the agent is told to stop when the test
+		// is over: one that never reported ready would otherwise keep its
+		// port, its folder and its goroutine.
+		t.Cleanup(cancel)
+		ready, done := make(chan net.Addr, 1), make(chan error, 1)
+		a.cancel, a.done = cancel, done
+		go func() {
+			done <- serve(ctx, cfg, slog.New(slog.NewTextHandler(a.log, nil)), func(addr net.Addr) { ready <- addr })
+		}()
+		select {
+		case addr := <-ready:
+			a.addr = addr.String()
+			t.Cleanup(func() { a.stop() })
+			return a
+		case err := <-done:
+			// A port that was free when it was looked for can be someone
+			// else's by the time the agent asks for it. Then another one is
+			// looked for, a few times at most. Whatever else ends the agent
+			// at once is a failure.
+			if named || try == startTries || !addressInUse(err) {
+				t.Fatalf("serve ended at once: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the agent did not start")
+		}
+	}
+}
+
+// startTries is how often startAgent looks for a port before it gives up.
+const startTries = 5
+
+// freeAddress returns an address on this machine that nothing listens on at
+// this moment. It is not kept: whoever wants it has to take it, and may find
+// it taken.
+func freeAddress(t *testing.T) string {
+	t.Helper()
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("config: %v", err)
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	// Whatever happens below, the agent is told to stop when the test is
-	// over: one that never reported ready would otherwise keep its port, its
-	// folder and its goroutine.
-	t.Cleanup(cancel)
-	a.cancel = cancel
-	ready := make(chan net.Addr, 1)
-	go func() {
-		a.done <- serve(ctx, cfg, slog.New(slog.NewTextHandler(a.log, nil)), func(addr net.Addr) { ready <- addr })
-	}()
-	select {
-	case addr := <-ready:
-		a.addr = addr.String()
-	case err := <-a.done:
-		t.Fatalf("serve ended at once: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("the agent did not start")
-	}
-	t.Cleanup(func() { a.stop() })
-	return a
+	defer probe.Close()
+	return probe.Addr().String()
+}
+
+// addressInUse reports whether err says that the address to listen on is
+// taken. Windows has a number of its own for that.
+func addressInUse(err error) bool {
+	const windowsAddressInUse = syscall.Errno(10048) // WSAEADDRINUSE
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, windowsAddressInUse)
 }
 
 // stop ends the agent and returns what serve returned. It may be called
@@ -203,10 +233,55 @@ type phone struct {
 	t      *testing.T
 	scheme string
 	addr   string
-	pin    *tlsid.Fingerprint // nil until the phone trusts a certificate
-	seen   tlsid.Fingerprint  // what the last handshake presented
 	token  string
 	client *http.Client
+
+	// mu guards pin and seen. A handshake reads and writes them on a
+	// goroutine of the transport, and that goroutine can still be running
+	// when the request it was started for has returned: a request that ends
+	// with its context leaves its dial behind. Nothing touches the two
+	// fields but the four methods below.
+	mu sync.Mutex
+	// pin is the key the phone holds its connections to. It is nil until the
+	// phone trusts a certificate. For the length of a pairing attempt it is
+	// what the first connection of that attempt presented, and it stays
+	// after the attempt only if the phone was paired.
+	pin *tlsid.Fingerprint
+	// seen is what the last handshake presented.
+	seen tlsid.Fingerprint
+}
+
+// present records what a handshake presented and reports whether the phone
+// takes it: any key while it holds its connections to none, and after that
+// the pinned key and no other.
+func (p *phone) present(fp tlsid.Fingerprint) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seen = fp
+	return p.pin == nil || fp == *p.pin
+}
+
+// presented returns what the last handshake presented.
+func (p *phone) presented() tlsid.Fingerprint {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.seen
+}
+
+// trusted returns the key the phone holds its connections to, nil when it
+// holds them to none. What it points to is never written again.
+func (p *phone) trusted() *tlsid.Fingerprint {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pin
+}
+
+// trust makes pin the key the phone holds its connections to; nil lifts
+// that. The caller must not write to what pin points to afterwards.
+func (p *phone) trust(pin *tlsid.Fingerprint) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pin = pin
 }
 
 func newPhone(t *testing.T, scheme, addr string) *phone {
@@ -223,8 +298,7 @@ func newPhone(t *testing.T, scheme, addr string) *phone {
 				if err != nil {
 					return err
 				}
-				p.seen = fp
-				if p.pin != nil && fp != *p.pin {
+				if !p.present(fp) {
 					return errors.New("server identity changed")
 				}
 				return nil
@@ -238,7 +312,8 @@ func newPhone(t *testing.T, scheme, addr string) *phone {
 func (a *agent) pinned(token string) *phone {
 	p := newPhone(a.t, "https", a.addr)
 	fp := a.fingerprint()
-	p.pin, p.token = &fp, token
+	p.trust(&fp)
+	p.token = token
 	return p
 }
 
@@ -249,6 +324,15 @@ func (p *phone) do(method, path string, body []byte) (*http.Response, error) {
 // doWithin is do for a request that ends with ctx, the reading of its answer
 // included.
 func (p *phone) doWithin(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	req, err := p.request(ctx, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	return p.client.Do(req)
+}
+
+// request builds a request of the phone, with its token when it has one.
+func (p *phone) request(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, method, p.scheme+"://"+p.addr+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -256,7 +340,7 @@ func (p *phone) doWithin(ctx context.Context, method, path string, body []byte) 
 	if p.token != "" {
 		req.Header.Set("Authorization", "Bearer "+p.token)
 	}
-	return p.client.Do(req)
+	return req, nil
 }
 
 func (p *phone) status(method, path string) int {
@@ -393,8 +477,8 @@ func TestTheFingerprintCommandPrintsWhatThePortPresents(t *testing.T) {
 	p := newPhone(t, "https", a.addr)
 	p.status("GET", "/healthz")
 	code, out, errOut := a.command("fingerprint")
-	if code != 0 || strings.TrimSpace(out) != p.seen.Display() {
-		t.Fatalf("fingerprint: exit %d, %q (stderr %q); the port presents %q", code, out, errOut, p.seen.Display())
+	if code != 0 || strings.TrimSpace(out) != p.presented().Display() {
+		t.Fatalf("fingerprint: exit %d, %q (stderr %q); the port presents %q", code, out, errOut, p.presented().Display())
 	}
 }
 
