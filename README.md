@@ -21,7 +21,7 @@ The app in this repository does not yet connect to that certificate. Until it do
 run the agent the way the app expects, over plain HTTP with a shared token of at
 least 16 characters:
 ```
-AGENT_DATA=./.agent-data AGENT_TOKEN=dev-secret-0123456789 go run ./cmd/agent --insecure-http
+AGENT_DATA=./.agent-data AGENT_TOKEN=replace-me-with-32-or-more-characters go run ./cmd/agent --insecure-http
 ```
 That listens on `:8080`. `go run ./cmd/agent help` lists every command and setting.
 

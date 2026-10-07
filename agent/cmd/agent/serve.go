@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/tls"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,6 +34,17 @@ import (
 // that tests can shorten it.
 var shutdownGrace = 5 * time.Second
 
+// serverLog hands what net/http reports to the agent's log, except failed
+// TLS handshakes: on an open port those are mostly scanners.
+type serverLog struct{ log *slog.Logger }
+
+func (w serverLog) Write(p []byte) (int, error) {
+	if !bytes.HasPrefix(p, []byte("http: TLS handshake error")) {
+		w.log.Error(strings.TrimSpace(string(p)))
+	}
+	return len(p), nil
+}
+
 func cmdServe(ctx context.Context, args []string, getenv func(string) string, stderr io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -45,6 +58,10 @@ func cmdServe(ctx context.Context, args []string, getenv func(string) string, st
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Once the agent has been told to stop, the signals get their default
+	// behaviour back: a second interrupt ends the process at once instead of
+	// being swallowed while the first one is still being acted on.
+	context.AfterFunc(ctx, stop)
 	return serve(ctx, cfg, slog.New(slog.NewTextHandler(stderr, nil)), nil)
 }
 
@@ -62,12 +79,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 	if err != nil {
 		return err
 	}
-	adminServing := false
-	defer func() {
-		if !adminServing {
-			adminLn.Close()
-		}
-	}()
+	// However this function ends, the socket is removed and the folder given
+	// up. On the ordinary way out the admin server has closed the listener
+	// before; closing it a second time does nothing.
+	defer adminLn.Close()
 	devices, err := state.LoadDevices(dir, time.Now)
 	if err != nil {
 		return err
@@ -130,17 +145,27 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 		ln = tls.NewListener(ln, tlsid.ServerConfig(cert))
 	}
 
-	// The standard library reports every failed TLS handshake through
-	// ErrorLog; on an open port that is mostly scanners, so it is dropped.
-	quiet := log.New(io.Discard, "", 0)
+	// What net/http has to report, such as the panic of a handler or an
+	// accept that fails, goes to the agent's log. The logger adds nothing in
+	// front of a report: serverLog tells failed handshakes by how they start.
+	errorLog := log.New(serverLog{logger}, "", 0)
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
-		ErrorLog:          quiet,
+		ErrorLog:          errorLog,
 	}
-	adminSrv := &http.Server{Handler: adminServer.Handler(), ReadHeaderTimeout: 10 * time.Second, ErrorLog: quiet}
+	// Requests on the admin socket end when the agent begins to stop. The
+	// socket itself stays to the end, and with it the lock on the folder.
+	adminCtx, endAdminRequests := context.WithCancel(context.Background())
+	defer endAdminRequests()
+	adminSrv := &http.Server{
+		Handler:           adminServer.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ErrorLog:          errorLog,
+		BaseContext:       func(net.Listener) context.Context { return adminCtx },
+	}
 
 	logger.Info("docker-mobile-agent started", "version", version, "listen", ln.Addr().String(), "docker", cfg.DockerHost, "data", cfg.DataDir)
 	switch {
@@ -152,7 +177,9 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 	if cfg.LegacyToken != "" {
 		logger.Info("AGENT_TOKEN is set: it gives full control to whoever holds it; pairing gives each phone its own revocable token")
 		if len(cfg.LegacyToken) < config.WeakLegacyToken {
-			logger.Warn("AGENT_TOKEN is short; use at least 32 characters", "length", len(cfg.LegacyToken))
+			// The length itself stays out of the log: the authentication
+			// takes care that it cannot be learned from outside.
+			logger.Warn("AGENT_TOKEN is short; use at least 32 characters")
 		}
 	}
 	if cfg.LegacyToken == "" && len(devices.List()) == 0 {
@@ -161,7 +188,6 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 
 	errc := make(chan error, 2)
 	go func() { errc <- srv.Serve(ln) }()
-	adminServing = true
 	go func() { errc <- adminSrv.Serve(adminLn) }()
 	if ready != nil {
 		ready(ln.Addr())
@@ -174,6 +200,10 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 	}
 
 	logger.Info("stopping")
+	// A pair command that is waiting ends now and not after the grace: no
+	// phone could use its code any more. One that starts from here on ends
+	// at once for the same reason.
+	endAdminRequests()
 	grace, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	// Stop accepting and let short requests finish. Streams and terminals
@@ -181,11 +211,17 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 	// clients see the connection close instead of hanging.
 	shutdownErr := srv.Shutdown(grace)
 	registry.CloseAll()
-	srv.Close()
+	// What fails on the way out is reported, unless it only says that the
+	// thing was closed already.
+	report := func(what string, err error) {
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			logger.Warn(what, "error", err)
+		}
+	}
+	report("stopping: closing the server failed", srv.Close())
 	// The admin socket goes last: closing it gives up the lock on the state
-	// folder, and until here a request could still write there. It also ends
-	// a pair command that is still waiting.
-	adminSrv.Close()
+	// folder, and until here a request could still write there.
+	report("stopping: closing the admin socket failed", adminSrv.Close())
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return serveErr
 	}

@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
+	"github.com/retransmit/docker-mobile/agent/internal/admin"
 	"github.com/retransmit/docker-mobile/agent/internal/config"
 	"github.com/retransmit/docker-mobile/agent/internal/tlsid"
 )
@@ -58,11 +60,28 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 }
 
+// terminalGreeting is what the fake daemon sends once a terminal is open.
+const terminalGreeting = "ready"
+
 // fakeDocker answers lists at once and keeps /events open until the caller
-// goes away.
+// goes away. It starts a terminal the way the daemon does: for POST
+// /exec/<id>/start it takes the connection over, answers 101, sends
+// terminalGreeting and then holds the connection until the caller closes it.
 func fakeDocker(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/exec/") && strings.HasSuffix(r.URL.Path, "/start") {
+			io.Copy(io.Discard, r.Body)
+			conn, rw, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			defer conn.Close()
+			rw.WriteString("HTTP/1.1 101 UPGRADED\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n" + terminalGreeting)
+			rw.Flush()
+			io.Copy(io.Discard, rw)
+			return
+		}
 		if strings.HasSuffix(r.URL.Path, "/events") {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte("{\"Type\":\"container\"}\n"))
@@ -100,6 +119,10 @@ func startAgent(t *testing.T, extra ...string) *agent {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dataDir) })
+	// The fake daemon takes its port before the agent's is looked for:
+	// started after the probe, it would be the nearest contender for the
+	// port the probe has just given back.
+	docker := fakeDocker(t)
 	probe, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +135,7 @@ func startAgent(t *testing.T, extra ...string) *agent {
 		"AGENT_LISTEN":    listen,
 		"AGENT_ADVERTISE": "127.0.0.1",
 		"AGENT_NAME":      "test agent",
-		"DOCKER_HOST":     "tcp://" + fakeDocker(t).Listener.Addr().String(),
+		"DOCKER_HOST":     "tcp://" + docker.Listener.Addr().String(),
 	}}
 	for i := 0; i+1 < len(extra); i += 2 {
 		a.env[extra[i]] = extra[i+1]
@@ -122,6 +145,10 @@ func startAgent(t *testing.T, extra ...string) *agent {
 		t.Fatalf("config: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	// Whatever happens below, the agent is told to stop when the test is
+	// over: one that never reported ready would otherwise keep its port, its
+	// folder and its goroutine.
+	t.Cleanup(cancel)
 	a.cancel = cancel
 	ready := make(chan net.Addr, 1)
 	go func() {
@@ -248,6 +275,9 @@ func TestTheSharedTokenWorksOverThePinnedCertificate(t *testing.T) {
 	if strings.Contains(log, shared) {
 		t.Fatal("the shared token is in the log")
 	}
+	if strings.Contains(log, "length=") {
+		t.Fatalf("the length of the shared token is in the log: %s", log)
+	}
 	p := a.pinned(shared)
 	if got := p.status("GET", "/v1.45/containers/json"); got != http.StatusOK {
 		t.Fatalf("code = %d, want 200", got)
@@ -255,6 +285,17 @@ func TestTheSharedTokenWorksOverThePinnedCertificate(t *testing.T) {
 	p.token = "wrong"
 	if got := p.status("GET", "/containers/json"); got != http.StatusUnauthorized {
 		t.Fatalf("code = %d, want 401", got)
+	}
+}
+
+func TestASharedTokenOf32CharactersStartsWithoutTheWarning(t *testing.T) {
+	a := startAgent(t, "AGENT_TOKEN", strings.Repeat("s", 32))
+	log := a.log.String()
+	if !strings.Contains(log, "AGENT_TOKEN is set") {
+		t.Fatalf("the log lacks the notice about the shared token: %s", log)
+	}
+	if strings.Contains(log, "AGENT_TOKEN is short") {
+		t.Fatalf("a shared token of 32 characters was called short: %s", log)
 	}
 }
 
@@ -269,6 +310,75 @@ func TestAFreshAgentSaysHowToPairAndPrintsNoCode(t *testing.T) {
 	}
 	if strings.Contains(log, "dockermobile://") {
 		t.Fatal("a pairing link was written to the log")
+	}
+}
+
+func TestTheServerLogDropsFailedHandshakesAndKeepsTheRest(t *testing.T) {
+	var out syncBuf
+	w := serverLog{slog.New(slog.NewTextHandler(&out, nil))}
+
+	// What net/http writes about a scanner that does not speak TLS.
+	handshake := []byte("http: TLS handshake error from 203.0.113.9:40000: tls: first record does not look like a TLS handshake\n")
+	if n, err := w.Write(handshake); n != len(handshake) || err != nil {
+		t.Fatalf("Write = %d, %v", n, err)
+	}
+	if out.String() != "" {
+		t.Fatalf("a failed handshake was logged: %s", out.String())
+	}
+
+	for name, c := range map[string]struct {
+		report string
+		want   []string // what the log must hold of it
+	}{
+		"the panic of a handler": {
+			"http: panic serving 203.0.113.9:40000: boom\ngoroutine 7 [running]:\nmain.handler()\n",
+			[]string{"http: panic serving 203.0.113.9:40000: boom", "main.handler()"},
+		},
+		"an accept that fails": {
+			"http: Accept error: accept tcp [::]:8443: accept4: too many open files; retrying in 1s\n",
+			[]string{"http: Accept error: accept tcp [::]:8443: accept4: too many open files; retrying in 1s"},
+		},
+	} {
+		before := out.String()
+		if n, err := w.Write([]byte(c.report)); n != len(c.report) || err != nil {
+			t.Fatalf("%s: Write = %d, %v", name, n, err)
+		}
+		logged := strings.TrimPrefix(out.String(), before)
+		if !strings.Contains(logged, "level=ERROR") {
+			t.Errorf("%s is not logged as an error: %q", name, logged)
+		}
+		for _, want := range c.want {
+			if !strings.Contains(logged, want) {
+				t.Errorf("%s: the log lacks %q: %q", name, want, logged)
+			}
+		}
+		if strings.Count(logged, "\n") != 1 {
+			t.Errorf("%s does not take exactly one line of the log: %q", name, logged)
+		}
+	}
+}
+
+func TestGarbageOnTheTLSPortLeavesNoLineAndTheAgentKeepsServing(t *testing.T) {
+	a := startAgent(t)
+	conn, err := net.Dial("tcp", a.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := conn.Write([]byte("this is not a TLS handshake\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	// The agent gives the connection up; by then it has reported whatever it
+	// reports about it.
+	if _, err := io.Copy(io.Discard, conn); errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("the agent kept a connection that does not speak TLS")
+	}
+	if got := a.pinned("").status("GET", "/healthz"); got != http.StatusOK {
+		t.Fatalf("after the garbage: /healthz = %d, want 200", got)
+	}
+	if log := a.log.String(); strings.Contains(log, "handshake") || strings.Contains(log, "level=ERROR") {
+		t.Fatalf("the failed handshake is in the log: %s", log)
 	}
 }
 
@@ -358,6 +468,44 @@ func TestStoppingTheAgentEndsStreamsAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestStoppingTheAgentEndsAnOpenTerminal(t *testing.T) {
+	// A terminal is a connection the handler has taken over: stopping the
+	// HTTP server neither waits for it nor closes it.
+	a := startAgent(t, "AGENT_TOKEN", shared)
+	p := a.pinned(shared)
+	dialer := websocket.Dialer{
+		TLSClientConfig:  p.client.Transport.(*http.Transport).TLSClientConfig,
+		HandshakeTimeout: 3 * time.Second,
+	}
+	id := strings.Repeat("0123456789abcdef", 4)
+	ws, _, err := dialer.Dial("wss://"+a.addr+"/exec/"+id+"/ws", http.Header{"Authorization": {"Bearer " + p.token}})
+	if err != nil {
+		t.Fatalf("open the terminal: %v", err)
+	}
+	defer ws.Close()
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, data, err := ws.ReadMessage(); err != nil || string(data) != terminalGreeting {
+		t.Fatalf("the terminal is not through to the daemon: %q, %v", data, err)
+	}
+	ws.SetReadDeadline(time.Time{})
+
+	if err := a.stop(); err != nil {
+		t.Fatalf("serve returned %v", err)
+	}
+	// The daemon sends nothing more, so a read that returns means that the
+	// terminal is over.
+	ended := make(chan struct{})
+	go func() {
+		ws.ReadMessage()
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the terminal outlived the agent")
+	}
+}
+
 func TestASecondAgentOnTheSameFolderIsRefused(t *testing.T) {
 	a := startAgent(t)
 	env := func(k string) string {
@@ -379,6 +527,12 @@ func TestASecondAgentIsRefusedBeforeItTouchesTheState(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.env["AGENT_DATA"], "devices.json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// And take the certificate away. A second agent that loaded its identity
+	// before taking the admin socket would issue a new one.
+	certificate := filepath.Join(a.env["AGENT_DATA"], "tls.crt")
+	if err := os.Remove(certificate); err != nil {
+		t.Fatal(err)
+	}
 	env := func(k string) string {
 		if k == "AGENT_LISTEN" {
 			return "127.0.0.1:0"
@@ -388,6 +542,9 @@ func TestASecondAgentIsRefusedBeforeItTouchesTheState(t *testing.T) {
 	var errOut bytes.Buffer
 	if code := run(context.Background(), []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
 		t.Fatalf("a second agent: exit %d, %s", code, errOut.String())
+	}
+	if _, err := os.Stat(certificate); !os.IsNotExist(err) {
+		t.Fatalf("the agent that was refused wrote a certificate: %v", err)
 	}
 }
 
@@ -408,8 +565,36 @@ func TestTheStateFolderStaysLockedUntilRequestsHaveStopped(t *testing.T) {
 		t.Fatalf("the stream did not start: %v", err)
 	}
 
+	// A pair command that waits for its phone.
+	waiting := make(chan struct{})
+	pairEnded := make(chan error, 1)
+	go func() {
+		pairEnded <- admin.NewClient(a.env["AGENT_DATA"]).Pair(context.Background(), admin.PairRequest{}, func(e admin.Event) {
+			if e.Event == admin.EventStarted {
+				close(waiting)
+			}
+		})
+	}()
+	select {
+	case <-waiting:
+	case err := <-pairEnded:
+		t.Fatalf("the pairing ended before it began to wait: %v", err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pairing did not start")
+	}
+
 	a.cancel()
 	waitFor(t, "the agent to begin stopping", func() bool { return strings.Contains(a.log.String(), "stopping") })
+
+	// The pair command hears of it now, not when the grace is over.
+	select {
+	case err := <-pairEnded:
+		if !errors.Is(err, admin.ErrStopped) {
+			t.Fatalf("the waiting pairing ended with %v, want %v", err, admin.ErrStopped)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the waiting pairing did not end when the agent began to stop")
+	}
 
 	// The first agent is still letting its stream finish. A second one on the
 	// same folder must be refused now; if it were let in, it would serve
@@ -513,7 +698,7 @@ func TestCommandLine(t *testing.T) {
 		{name: "help", args: []string{"help"}, code: 0, inStdout: "docker-mobile-agent fingerprint"},
 		{name: "version", args: []string{"version"}, code: 0, inStdout: "docker-mobile-agent dev (commit "},
 		{name: "fingerprint before the first run", args: []string{"fingerprint"}, code: 1, inStderr: "no certificate"},
-		{name: "a short shared token", env: []string{"AGENT_TOKEN", "too-short"}, code: 1, inStderr: "AGENT_TOKEN is too short (9 characters)"},
+		{name: "a short shared token", env: []string{"AGENT_TOKEN", "too-short"}, code: 1, inStderr: "AGENT_TOKEN is too short: use at least 16 characters"},
 		{name: "a bad listen address", args: []string{"serve"}, env: []string{"AGENT_LISTEN", "nope"}, code: 1, inStderr: "AGENT_LISTEN"},
 		{name: "a bad flag for serve", args: []string{"--verbose"}, code: 1, inStderr: "flag provided but not defined"},
 		{name: "healthcheck without an agent", args: []string{"healthcheck", "--insecure-http"}, env: []string{"AGENT_LISTEN", "127.0.0.1:1"}, code: 1},

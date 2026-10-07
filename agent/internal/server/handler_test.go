@@ -157,6 +157,9 @@ func TestTheProxyNeedsCredentials(t *testing.T) {
 	if rec := f.do("GET", "/containers/json", "", nil); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code = %d, want 401", rec.Code)
 	}
+	if rec := f.do("GET", "/exec/abc/ws", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("the terminal route without a token: code = %d, want 401", rec.Code)
+	}
 	if rec := f.do("GET", "/containers/json", legacy, nil); rec.Code != http.StatusOK {
 		t.Fatalf("shared token: code = %d, want 200", rec.Code)
 	}

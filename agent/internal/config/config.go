@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"unicode"
 
 	"github.com/retransmit/docker-mobile/agent/internal/state"
 )
@@ -41,10 +42,14 @@ type Config struct {
 // Load builds a Config from getenv. insecureFlag is the --insecure-http
 // flag; AGENT_INSECURE_HTTP=1 means the same.
 func Load(getenv func(string) string, insecureFlag bool) (Config, error) {
+	insecureEnv, err := onOff("AGENT_INSECURE_HTTP", getenv("AGENT_INSECURE_HTTP"))
+	if err != nil {
+		return Config{}, err
+	}
 	cfg := Config{
 		ListenAddr:   getenv("AGENT_LISTEN"),
 		DockerHost:   getenv("DOCKER_HOST"),
-		InsecureHTTP: insecureFlag || truthy(getenv("AGENT_INSECURE_HTTP")),
+		InsecureHTTP: insecureFlag || insecureEnv,
 		LegacyToken:  getenv("AGENT_TOKEN"),
 		Name:         strings.TrimSpace(getenv("AGENT_NAME")),
 	}
@@ -58,11 +63,8 @@ func Load(getenv func(string) string, insecureFlag bool) (Config, error) {
 		cfg.DockerHost = defaultDockerHost
 	}
 	cfg.DataDir = DataDir(getenv)
-	if n := len(cfg.LegacyToken); n > 0 && n < MinLegacyToken {
-		return Config{}, fmt.Errorf("AGENT_TOKEN is too short (%d characters): use at least %d, or remove it and pair devices instead", n, MinLegacyToken)
-	}
-	if state.IsDeviceToken(cfg.LegacyToken) {
-		return Config{}, errors.New("AGENT_TOKEN must not start with \"dm1.\": that prefix marks the tokens of paired devices")
+	if err := checkLegacyToken(cfg.LegacyToken); err != nil {
+		return Config{}, err
 	}
 	_, listenPort, err := net.SplitHostPort(cfg.ListenAddr)
 	if err != nil {
@@ -84,10 +86,52 @@ func DataDir(getenv func(string) string) string {
 	return defaultDataDir
 }
 
-func truthy(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
+// checkLegacyToken refuses a shared token that is too short, that could not
+// match, or that would be taken for the token of a device. No token at all
+// is fine. Its errors say what is wrong without the token and without its
+// length: they end up in a log, and the authentication takes care that the
+// length cannot be learned from outside.
+func checkLegacyToken(token string) error {
+	if token == "" {
+		return nil
 	}
-	return false
+	// A phone sends neither white space around its token nor a control
+	// character in it, so no request would ever match such a token, with
+	// nothing but a 401 to show for it. The usual cause is the carriage
+	// return that an env file written on Windows leaves at the end of the
+	// line. This comes before the length: the hidden character would count
+	// toward it.
+	wrong := ""
+	switch {
+	case strings.TrimLeftFunc(token, unicode.IsSpace) != token:
+		wrong = "starts with white space"
+	case strings.TrimRightFunc(token, unicode.IsSpace) != token:
+		wrong = "ends with white space"
+	case strings.IndexFunc(token, unicode.IsControl) >= 0:
+		wrong = "contains a control character"
+	}
+	if wrong != "" {
+		return fmt.Errorf("AGENT_TOKEN %s: a phone does not send that, so the token would never match; look for a stray space or a line ending in the value", wrong)
+	}
+	if len(token) < MinLegacyToken {
+		return fmt.Errorf("AGENT_TOKEN is too short: use at least %d characters, or remove it and pair devices instead", MinLegacyToken)
+	}
+	if state.IsDeviceToken(token) {
+		return errors.New("AGENT_TOKEN must not start with \"dm1.\": that prefix marks the tokens of paired devices")
+	}
+	return nil
+}
+
+// onOff reads a switch from the environment. No value is off; 1, true, yes
+// and on are on; 0, false, no and off are off, in any case and with white
+// space around them. Anything else is an error that names the variable and
+// the value: a mistyped switch must not pass for off.
+func onOff(name, value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "0", "false", "no", "off":
+		return false, nil
+	case "1", "true", "yes", "on":
+		return true, nil
+	}
+	return false, fmt.Errorf("%s %q is neither on nor off: use 1, true, yes or on, or 0, false, no or off", name, value)
 }
