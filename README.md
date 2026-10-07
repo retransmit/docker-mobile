@@ -48,6 +48,28 @@ in a container:
   A container's main process writes to that container's log, and the
   pairing code would be readable there for as long as it is valid.
 
+### Coming from an earlier version of the agent
+
+- The agent serves TLS with its own certificate on port 8443 by default.
+  The app in this repository cannot use that yet: start the agent with
+  `--insecure-http` (plain HTTP on port 8080, as before) until it can.
+- `AGENT_TOKEN` is optional now. When it is set it must be at least 16
+  characters, with no spaces around it; the old example value
+  `dev-secret` is refused.
+- The agent keeps a state folder (`AGENT_DATA`, by default
+  `/var/lib/docker-mobile-agent`), also in plain HTTP mode. It must belong
+  to the user the agent runs as and hold nothing else. One agent uses one
+  folder, and `pair`, `devices` and `revoke` need the same user and the
+  same `AGENT_DATA`.
+- Ten wrong tokens or pairing attempts within ten minutes from one address
+  block that address for 1 to 15 minutes. Behind a reverse proxy every
+  client shares the proxy's address.
+- Requests with an `Origin` header are refused, request bodies are limited
+  to 16 MiB except for builds, image loads and uploads into a container,
+  and errors are answered as JSON.
+- Stopping the agent can take up to five seconds while open streams are
+  ended.
+
 ## Run the app (dev)
 ```
 cd app
