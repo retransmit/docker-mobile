@@ -18,3 +18,9 @@ func checkOwner(path string, info fs.FileInfo) error {
 	}
 	return sameUser(path, stat.Uid, uint32(os.Geteuid()))
 }
+
+// othersCanWrite reports whether the mode of a folder lets its group or
+// everyone else write to it.
+func othersCanWrite(info fs.FileInfo) bool {
+	return info.Mode().Perm()&0o022 != 0
+}

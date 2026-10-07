@@ -149,7 +149,7 @@ func TestOpenTakesAFolderThatHoldsOnlyTheAgentsFiles(t *testing.T) {
 	path := folderWith(t,
 		"admin.sock", "agent.lock", "devices.json", "tls.crt", "tls.key",
 		".devices.json.1234567890", ".tls.crt.42", ".tls.key.42",
-		"probe.LEFTBEHIND", ".probe.LEFTBEHIND.7",
+		"probe.1234567890",
 		"lost+found/",
 	)
 	held := holds(t, path)
@@ -221,6 +221,27 @@ func TestOpenRefusesAFolderThatHoldsAnotherFileAndLeavesItAlone(t *testing.T) {
 	}
 }
 
+func TestOpenMakesNothingOnTheWayToAFolderItRefuses(t *testing.T) {
+	// The path leads through a folder that is not there and back out of it:
+	// it names the folder that holds the notes, and that one is refused.
+	shared := folderWith(t, "notes.txt")
+	held, before := holds(t, shared), statFolder(t, shared)
+	separator := string(filepath.Separator)
+	_, err := Open(shared + separator + "x" + separator + "..")
+	if err == nil {
+		t.Fatal("a folder that holds another file was accepted")
+	}
+	if !strings.Contains(err.Error(), shared) || strings.Contains(err.Error(), "..") {
+		t.Errorf("the error does not name the folder as it is called without the detour: %v", err)
+	}
+	if now := holds(t, shared); strings.Join(now, "\n") != strings.Join(held, "\n") {
+		t.Errorf("the refused folder holds %v, it held %v", now, held)
+	}
+	if after := statFolder(t, shared); !after.ModTime().Equal(before.ModTime()) {
+		t.Error("something was written into the refused folder")
+	}
+}
+
 func TestAFolderMustBelongToTheUserTheAgentRunsAs(t *testing.T) {
 	for _, same := range []uint32{0, 1000} {
 		if err := sameUser("/srv/agent", same, same); err != nil {
@@ -245,29 +266,60 @@ func TestAFolderMustBelongToTheUserTheAgentRunsAs(t *testing.T) {
 	}
 }
 
-func TestAFolderThatCannotStoreTheProbeIsAClearError(t *testing.T) {
+func TestWhatAppearsInAFolderWhileItIsTakenIsRefused(t *testing.T) {
+	// The second look at a folder that others could write to, after it was
+	// found empty and made private. Empty is what it has to be still.
+	for _, c := range []struct {
+		holds   []string
+		refused string // the entry the error names; empty when the folder passes
+	}{
+		{nil, ""},
+		{[]string{"lost+found/"}, ""},
+		// A device list that got in between the two looks.
+		{[]string{"devices.json"}, "devices.json"},
+		{[]string{"lost+found/", "probe.1234567890"}, "probe.1234567890"},
+		{[]string{"sub/"}, "sub"},
+	} {
+		path := folderWith(t, c.holds...)
+		err := checkStillEmpty(path)
+		if c.refused == "" {
+			if err != nil {
+				t.Errorf("holding %v: refused: %v", c.holds, err)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("holding %v: accepted", c.holds)
+			continue
+		}
+		for _, want := range []string{path, "other users could write", `"` + c.refused + `"`, "empty the folder", "AGENT_DATA"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("holding %v: the error does not say %s: %v", c.holds, want, err)
+			}
+		}
+	}
+}
+
+func TestAFolderThatTakesNoFileIsAClearError(t *testing.T) {
 	d := openTemp(t)
-	// Where the probe goes there is a folder that is not empty, so the probe
-	// cannot be renamed into place: the folder takes no file of that name.
-	const name = "probe.x"
-	if err := os.Mkdir(d.Path(name), 0o700); err != nil {
+	if err := d.probe(); err != nil {
+		t.Fatalf("a folder that was just opened: %v", err)
+	}
+	if left := holds(t, d.Path("")); len(left) != 0 {
+		t.Fatalf("the probe left something behind: %v", left)
+	}
+	// The folder disappears: no file can be made in it any more.
+	if err := os.RemoveAll(d.Path("")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(d.Path(name), "x"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	err := d.probe(name)
+	err := d.probe()
 	if err == nil {
-		t.Fatal("the probe reported success although it could not be stored")
+		t.Fatal("the probe reported success although no file could be made")
 	}
-	for _, want := range []string{d.Path(""), "cannot store a file"} {
+	for _, want := range []string{d.Path(""), "not writable"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error does not say %q: %v", want, err)
 		}
-	}
-	// Nothing of the attempt is left behind.
-	if left := holds(t, d.Path("")); len(left) != 1 || left[0] != name {
-		t.Fatalf("the folder holds %v, want only what was in the way", left)
 	}
 }
 
