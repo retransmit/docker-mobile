@@ -4,7 +4,9 @@
 package server
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,9 +24,17 @@ import (
 // APILevel is the version of the agent's own API, reported by whoami.
 const APILevel = 1
 
-// Options is everything the handler needs. Devices, Pairing and Limiter are
-// required, and DockerHost must name the daemon: without them New returns an
-// error. Everything else may be left out, with the effect noted at the field.
+// fingerprintLen is the length of a certificate fingerprint: one SHA-256
+// digest.
+const fingerprintLen = sha256.Size
+
+// Options is everything the handler needs. Devices, Pairing, Limiter and
+// Conns are required, and Fingerprint must be empty or 32 bytes: otherwise
+// New returns an error that names the option. DockerHost must name the
+// daemon as well; when it is missing or cannot be used, the error is the
+// dialer's and names the environment variable DOCKER_HOST instead of the
+// option. Everything else may be left out, with the effect noted at the
+// field.
 type Options struct {
 	// DockerHost is where the Docker daemon listens (unix:// or tcp://).
 	DockerHost string
@@ -33,12 +43,13 @@ type Options struct {
 	LegacyToken string
 	Pairing     *pairing.Manager
 	// Fingerprint is the agent's certificate fingerprint (32 bytes), or empty
-	// when it serves plain HTTP behind a proxy.
+	// when it serves plain HTTP behind a proxy. No proof of a phone could
+	// match a fingerprint of another length.
 	Fingerprint []byte
 	Limiter     *throttle.Limiter
-	// Conns tracks the requests that are open so that they can be ended. Nil
-	// means none is tracked: removing a device or stopping the agent then
-	// ends nothing that is open.
+	// Conns tracks the requests that are open, so that removing a device ends
+	// its requests and stopping the agent ends them all. Without it both
+	// would end nothing, and nobody would be told.
 	Conns *conns.Registry
 	// Version is what whoami and a pairing report; it may be empty.
 	Version string
@@ -53,16 +64,24 @@ type Options struct {
 }
 
 // New builds the agent's HTTP handler. It returns an error that names the
-// first required option that is missing.
+// first option that is missing or cannot be used. For DockerHost that error
+// comes from the dialer and names DOCKER_HOST.
 func New(o Options) (http.Handler, error) {
-	// A request goes through each of these; without one it would panic.
 	switch {
+	// A request goes through each of these; without one it would panic.
 	case o.Devices == nil:
 		return nil, errors.New("server: the option Devices is required")
 	case o.Pairing == nil:
 		return nil, errors.New("server: the option Pairing is required")
 	case o.Limiter == nil:
 		return nil, errors.New("server: the option Limiter is required")
+	// Without these nothing panics, and the handler does not keep what it
+	// promises either: a removed device would keep its open streams, stopping
+	// the agent would end none of them, and no phone could pair.
+	case o.Conns == nil:
+		return nil, errors.New("server: the option Conns is required")
+	case len(o.Fingerprint) != 0 && len(o.Fingerprint) != fingerprintLen:
+		return nil, fmt.Errorf("server: the option Fingerprint must be empty or %d bytes long, not %d", fingerprintLen, len(o.Fingerprint))
 	}
 	if o.Log == nil {
 		o.Log = slog.New(slog.NewTextHandler(io.Discard, nil))

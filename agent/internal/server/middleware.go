@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,16 +78,44 @@ func rejectBrowsers(next http.Handler) http.Handler {
 	})
 }
 
-// roleGate lets a read-only device through only for the reads on the list.
+// roleGate lets a read-only device through only for the reads on the list,
+// and never with a request for a protocol upgrade.
 func roleGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		dev, _ := auth.Caller(r.Context())
-		if dev.Role != state.RoleFull && !policy.AllowedReadOnly(r.Method, r.URL.EscapedPath()) {
-			auth.WriteError(w, http.StatusForbidden, ReadOnlyMessage)
-			return
+		if dev.Role != state.RoleFull {
+			if !policy.AllowedReadOnly(r.Method, r.URL.EscapedPath()) {
+				auth.WriteError(w, http.StatusForbidden, ReadOnlyMessage)
+				return
+			}
+			dropUpgrade(r.Header)
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// dropUpgrade takes the request for a protocol upgrade out of a request's
+// headers: the Upgrade header, and the upgrade token in Connection that goes
+// with it. Once a backend answers such a request with 101, the proxy passes
+// bytes both ways without looking at them, and whatever the caller then
+// sends, a request that changes something included, reaches the backend
+// unchecked. The daemon answers none of the listed reads with 101; the agent
+// does not rely on that.
+func dropUpgrade(h http.Header) {
+	h.Del("Upgrade")
+	var kept []string
+	for _, value := range h.Values("Connection") {
+		for _, token := range strings.Split(value, ",") {
+			if token = strings.TrimSpace(token); token != "" && !strings.EqualFold(token, "upgrade") {
+				kept = append(kept, token)
+			}
+		}
+	}
+	if len(kept) == 0 {
+		h.Del("Connection")
+		return
+	}
+	h.Set("Connection", strings.Join(kept, ", "))
 }
 
 // fullOnly refuses read-only devices outright.

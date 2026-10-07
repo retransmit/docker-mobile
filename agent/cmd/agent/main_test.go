@@ -596,6 +596,11 @@ func TestStoppingTheAgentEndsAnOpenTerminal(t *testing.T) {
 	}
 }
 
+// secondAgentTimeout is how long a second agent on a folder that is in use
+// may take to be refused. It is refused at once. One that was let in would
+// serve until its context ends: the timeout ends it, and with it the test.
+const secondAgentTimeout = 3 * time.Second
+
 func TestASecondAgentOnTheSameFolderIsRefused(t *testing.T) {
 	a := startAgent(t)
 	env := func(k string) string {
@@ -604,8 +609,10 @@ func TestASecondAgentOnTheSameFolderIsRefused(t *testing.T) {
 		}
 		return a.env[k]
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), secondAgentTimeout)
+	defer cancel()
 	var errOut bytes.Buffer
-	if code := run(context.Background(), []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
+	if code := run(ctx, []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
 		t.Fatalf("a second agent: exit %d, %s", code, errOut.String())
 	}
 }
@@ -629,8 +636,10 @@ func TestASecondAgentIsRefusedBeforeItTouchesTheState(t *testing.T) {
 		}
 		return a.env[k]
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), secondAgentTimeout)
+	defer cancel()
 	var errOut bytes.Buffer
-	if code := run(context.Background(), []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
+	if code := run(ctx, []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
 		t.Fatalf("a second agent: exit %d, %s", code, errOut.String())
 	}
 	if _, err := os.Stat(certificate); !os.IsNotExist(err) {

@@ -166,17 +166,35 @@ func ReadFingerprint(dataDir string) (Fingerprint, error) {
 
 // LocalClientConfig is for a client on the same machine, such as the health
 // check: it trusts exactly the certificate stored in the state folder
-// dataDir, and nothing else.
+// dataDir, and nothing else, whatever the dates of that certificate say.
 func LocalClientConfig(dataDir string) (*tls.Config, error) {
 	certPEM, err := os.ReadFile(filepath.Join(dataDir, certFile))
 	if err != nil {
 		return nil, err
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(certPEM) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, fmt.Errorf("%s is not a certificate in PEM form", certFile)
 	}
-	return &tls.Config{RootCAs: pool, ServerName: ServerName, MinVersion: tls.VersionTLS13}, nil
+	stored, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", certFile, err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(stored)
+	return &tls.Config{
+		RootCAs:    pool,
+		ServerName: ServerName,
+		MinVersion: tls.VersionTLS13,
+		// The health check knows the agent by its certificate, as a phone
+		// does, and the dates of a certificate that is pinned mean nothing.
+		// Checked against the clock they would only do harm: a certificate
+		// issued while the clock was ahead is "not yet valid", the health
+		// check would fail while every phone works, and a restart would not
+		// help. So the certificate is checked at a moment at which it is
+		// valid, and everything else about the check stays as it is.
+		Time: func() time.Time { return stored.NotBefore },
+	}, nil
 }
 
 // ServerConfig is the TLS configuration the agent listens with: its single

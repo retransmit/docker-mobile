@@ -192,9 +192,11 @@ func (s *Devices) List() []Device {
 	return out
 }
 
-// Remove deletes a device. Check the error first: when it is set the removal
-// was not stored and the device is still paired, whatever the bool says.
-// Without an error the bool is false when no device has that id.
+// Remove deletes a device. Check the error first: when it is set the device
+// is still paired in the running agent, whatever the bool says, and whether
+// the file on disk still lists it is not known. The write may have failed
+// before the file was replaced, or only afterwards, when the folder was
+// synced. Without an error the bool is false when no device has that id.
 func (s *Devices) Remove(id string) (Device, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

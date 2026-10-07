@@ -246,27 +246,31 @@ func TestReadFingerprintReadsWithoutCreating(t *testing.T) {
 	}
 }
 
-func TestLocalClientConfigTrustsOnlyTheStoredCertificate(t *testing.T) {
-	serve := func(cert tls.Certificate) string {
-		ln, err := tls.Listen("tcp", "127.0.0.1:0", ServerConfig(cert))
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { ln.Close() })
-		go func() {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					return
-				}
-				go func() {
-					c.(*tls.Conn).Handshake()
-					c.Close()
-				}()
-			}
-		}()
-		return ln.Addr().String()
+// serve answers TLS handshakes with cert until the test ends and returns the
+// address it listens on.
+func serve(t *testing.T, cert tls.Certificate) string {
+	t.Helper()
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", ServerConfig(cert))
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				c.(*tls.Conn).Handshake()
+				c.Close()
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestLocalClientConfigTrustsOnlyTheStoredCertificate(t *testing.T) {
 	mine := openTemp(t)
 	myCert, _ := LoadOrCreate(mine, time.Now())
 	otherCert, _ := LoadOrCreate(openTemp(t), time.Now())
@@ -276,16 +280,52 @@ func TestLocalClientConfigTrustsOnlyTheStoredCertificate(t *testing.T) {
 		t.Fatalf("LocalClientConfig: %v", err)
 	}
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	conn, err := tls.DialWithDialer(dialer, "tcp", serve(myCert), cfg)
+	conn, err := tls.DialWithDialer(dialer, "tcp", serve(t, myCert), cfg)
 	if err != nil {
 		t.Fatalf("the agent's own certificate was refused: %v", err)
 	}
 	conn.Close()
-	if c, err := tls.DialWithDialer(dialer, "tcp", serve(otherCert), cfg); err == nil {
+	if c, err := tls.DialWithDialer(dialer, "tcp", serve(t, otherCert), cfg); err == nil {
 		c.Close()
 		t.Fatal("another agent's certificate was accepted")
 	}
 	if _, err := LocalClientConfig(openTemp(t).Path("")); err == nil {
 		t.Fatal("a folder without a certificate was accepted")
+	}
+}
+
+func TestLocalClientConfigDoesNotMindTheDatesOfTheCertificate(t *testing.T) {
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	for name, issued := range map[string]time.Time{
+		// The clock was four years ahead when the agent first ran.
+		"a certificate that is not valid yet": time.Now().AddDate(4, 0, 0),
+		// The agent has run without a restart for longer than its
+		// certificate lasts.
+		"a certificate that has run out": time.Now().Add(-validity - 24*time.Hour),
+	} {
+		mine := openTemp(t)
+		myCert, err := LoadOrCreate(mine, issued)
+		if err != nil {
+			t.Fatalf("%s: LoadOrCreate: %v", name, err)
+		}
+		cfg, err := LocalClientConfig(mine.Path(""))
+		if err != nil {
+			t.Fatalf("%s: LocalClientConfig: %v", name, err)
+		}
+		conn, err := tls.DialWithDialer(dialer, "tcp", serve(t, myCert), cfg)
+		if err != nil {
+			t.Errorf("%s was refused although it is the stored one: %v", name, err)
+			continue
+		}
+		conn.Close()
+		// A certificate with another key and the same dates is still refused.
+		otherCert, err := LoadOrCreate(openTemp(t), issued)
+		if err != nil {
+			t.Fatalf("%s: LoadOrCreate: %v", name, err)
+		}
+		if c, err := tls.DialWithDialer(dialer, "tcp", serve(t, otherCert), cfg); err == nil {
+			c.Close()
+			t.Errorf("%s: a certificate with another key was accepted", name)
+		}
 	}
 }

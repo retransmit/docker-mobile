@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -47,8 +48,9 @@ func (c *clock) advance(d time.Duration) {
 // daemon is a fake Docker daemon that records what reaches it.
 type daemon struct {
 	*httptest.Server
-	mu   sync.Mutex
-	seen []string
+	mu      sync.Mutex
+	seen    []string
+	headers http.Header // of the request that came last
 }
 
 func newDaemon(t *testing.T) *daemon {
@@ -58,6 +60,7 @@ func newDaemon(t *testing.T) *daemon {
 		body, _ := io.ReadAll(r.Body)
 		d.mu.Lock()
 		d.seen = append(d.seen, r.Method+" "+r.URL.EscapedPath()+" "+r.Header.Get("Authorization")+" "+string(body))
+		d.headers = r.Header.Clone()
 		d.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`[{"Id":"x"}]`))
@@ -72,8 +75,17 @@ func (d *daemon) requests() []string {
 	return append([]string(nil), d.seen...)
 }
 
+// lastHeaders returns the headers of the request that reached the daemon
+// last.
+func (d *daemon) lastHeaders() http.Header {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.headers.Clone()
+}
+
 type fixture struct {
 	handler http.Handler
+	dir     *state.Dir
 	devices *state.Devices
 	pairing *pairing.Manager
 	conns   *conns.Registry
@@ -97,6 +109,7 @@ func newFixture(t *testing.T, legacyToken string, fingerprint []byte, configure 
 		t.Fatal(err)
 	}
 	f := &fixture{
+		dir:     dir,
 		devices: devices,
 		pairing: pairing.NewManager(c.now, rand.Reader),
 		conns:   conns.New(),
@@ -212,6 +225,41 @@ func TestAReadOnlyDeviceReadsButCannotChangeAnything(t *testing.T) {
 	}
 	if after := len(f.daemon.requests()); after != before {
 		t.Fatalf("%d refused requests reached the daemon", after-before)
+	}
+}
+
+func TestAReadOnlyDeviceGetsNoProtocolUpgrade(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	_, viewer, _ := f.devices.Add("viewer", state.RoleReadOnly)
+	_, owner, _ := f.devices.Add("owner", state.RoleFull)
+	// A read that a read-only device may send, with a request for an upgrade.
+	// It returns the headers the daemon got.
+	read := func(token string) http.Header {
+		t.Helper()
+		rec := f.do("GET", "/containers/abc/logs", token, nil, "Connection", "Upgrade", "Upgrade", "tcp")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("code = %d, want 200", rec.Code)
+		}
+		return f.daemon.lastHeaders()
+	}
+	if got := read(viewer); len(got.Values("Upgrade")) != 0 {
+		t.Errorf("the read of a read-only device reached the daemon with Upgrade: %q", got.Values("Upgrade"))
+	}
+	if got := read(owner); got.Get("Upgrade") != "tcp" {
+		t.Errorf("the upgrade a full device asked for did not reach the daemon: Upgrade is %q", got.Get("Upgrade"))
+	}
+
+	// With the header goes the token that announces it, and nothing else that
+	// Connection names.
+	h := http.Header{"Connection": {"keep-alive, Upgrade", "upgrade"}, "Upgrade": {"tcp"}}
+	dropUpgrade(h)
+	if len(h) != 1 || strings.Join(h.Values("Connection"), "|") != "keep-alive" {
+		t.Errorf("after the upgrade was dropped the headers are %v, want only Connection: keep-alive", h)
+	}
+	h = http.Header{"Connection": {"Upgrade"}, "Upgrade": {"websocket"}, "Accept": {"*/*"}}
+	dropUpgrade(h)
+	if len(h) != 1 || h.Get("Accept") != "*/*" {
+		t.Errorf("after the upgrade was dropped the headers are %v, want only Accept", h)
 	}
 }
 
@@ -451,6 +499,56 @@ func TestPairingWithoutACertificateBindsToAnEmptyFingerprint(t *testing.T) {
 	}
 }
 
+func TestAPairingThatCannotBeStoredIsAnsweredWithoutTheCause(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	p, done, _ := f.pairing.Start(state.RoleFull, "")
+	// The folder disappears: nothing can be written any more.
+	folder := f.dir.Path("")
+	if err := os.RemoveAll(folder); err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{5}, pairing.NonceLen)
+	body, _ := json.Marshal(pairRequest{
+		V:     1,
+		Nonce: base64.RawURLEncoding.EncodeToString(nonce),
+		Proof: base64.RawURLEncoding.EncodeToString(pairing.PhoneProof(p.Code, agentFP, nonce)),
+		Name:  "Pixel 8",
+	})
+	rec := f.do("POST", "/agent/v1/pair", "", bytes.NewReader(body))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("a correct proof whose device could not be stored: code = %d, want 500", rec.Code)
+	}
+	// The cause names a file in the state folder. It is for the log and for
+	// whoever runs the pair command, not for a stranger on the network: the
+	// answer is a fixed text and nothing besides.
+	answer := rec.Body.String()
+	if answer != `{"message":"The agent could not store the new device"}`+"\n" {
+		t.Errorf("the answer is %q, want the fixed message alone", answer)
+	}
+	inJSON, _ := json.Marshal(folder)
+	for what, never := range map[string]string{
+		"the state folder":                 folder,
+		"the state folder, as JSON has it": strings.Trim(string(inJSON), `"`),
+		"the name of the device list":      "devices.json",
+		"what a device token begins with":  "dm1.",
+		"the field that carries the token": `"token"`,
+	} {
+		if strings.Contains(answer, never) {
+			t.Errorf("the answer holds %s: %q", what, answer)
+		}
+	}
+	if len(f.devices.List()) != 0 {
+		t.Error("a device exists although it could not be stored")
+	}
+	if r := <-done; r.Outcome != pairing.Failed {
+		t.Errorf("the pairing ended as %q, want %q", r.Outcome, pairing.Failed)
+	}
+	// The pairing is over: the same proof finds nothing to redeem.
+	if rec := f.do("POST", "/agent/v1/pair", "", bytes.NewReader(body)); rec.Code != http.StatusNotFound {
+		t.Errorf("the same proof again: code = %d, want 404", rec.Code)
+	}
+}
+
 func TestAskingWhileNothingIsPendingCountsAgainstTheAddress(t *testing.T) {
 	f := newFixture(t, "", agentFP)
 	// A well-formed request with a proof that fits no code.
@@ -589,6 +687,7 @@ func requiredOptions(t *testing.T) Options {
 		Devices:    devices,
 		Pairing:    pairing.NewManager(time.Now, rand.Reader),
 		Limiter:    throttle.New(time.Now),
+		Conns:      conns.New(),
 	}
 }
 
@@ -597,6 +696,7 @@ func TestNewNamesTheRequiredOptionThatIsMissing(t *testing.T) {
 		"Devices": func(o *Options) { o.Devices = nil },
 		"Pairing": func(o *Options) { o.Pairing = nil },
 		"Limiter": func(o *Options) { o.Limiter = nil },
+		"Conns":   func(o *Options) { o.Conns = nil },
 	} {
 		o := requiredOptions(t)
 		without(&o)
@@ -612,6 +712,36 @@ func TestNewNamesTheRequiredOptionThatIsMissing(t *testing.T) {
 	// With several missing, the first one is named.
 	if _, err := New(Options{DockerHost: "tcp://127.0.0.1:1"}); err == nil || !strings.Contains(err.Error(), "Devices") {
 		t.Errorf("New with nothing but a Docker host: error = %v, want one that names Devices", err)
+	}
+	// Without a Docker host the error is the dialer's. It names the
+	// environment variable the host comes from, not the option.
+	o := requiredOptions(t)
+	o.DockerHost = ""
+	if _, err := New(o); err == nil || !strings.Contains(err.Error(), "DOCKER_HOST") {
+		t.Errorf("New without a Docker host: error = %v, want one that names DOCKER_HOST", err)
+	}
+}
+
+func TestNewRefusesAFingerprintThatIsNotOne(t *testing.T) {
+	for _, n := range []int{1, 31, 33, 64} {
+		o := requiredOptions(t)
+		o.Fingerprint = bytes.Repeat([]byte{7}, n)
+		h, err := New(o)
+		if err == nil || h != nil {
+			t.Errorf("New with a fingerprint of %d bytes built a handler", n)
+			continue
+		}
+		if !strings.Contains(err.Error(), "Fingerprint") || !strings.Contains(err.Error(), strconv.Itoa(n)) {
+			t.Errorf("a fingerprint of %d bytes: the error does not name the option and the length: %v", n, err)
+		}
+	}
+	// No fingerprint, as behind a proxy, and one of the right length.
+	for _, fingerprint := range [][]byte{nil, {}, agentFP} {
+		o := requiredOptions(t)
+		o.Fingerprint = fingerprint
+		if _, err := New(o); err != nil {
+			t.Errorf("New with a fingerprint of %d bytes: %v", len(fingerprint), err)
+		}
 	}
 }
 
