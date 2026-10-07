@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/retransmit/docker-mobile/agent/internal/auth"
 )
 
 // fakeExecStart serves one connection: records the request, replies with
@@ -111,20 +110,12 @@ func TestExecBridgeEchoesBothDirections(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 	mux := http.NewServeMux()
-	mux.Handle("GET /exec/{id}/ws", auth.RequireToken("secret", h))
+	mux.Handle("GET /exec/{id}/ws", h)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/exec/abc/ws"
 
-	// Without a token -> rejected at the auth layer.
-	if _, resp, err := websocket.DefaultDialer.Dial(wsURL, nil); err == nil {
-		t.Fatal("expected auth rejection")
-	} else if resp == nil || resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("want 401, got %v", resp)
-	}
-
-	// With a token -> connect and echo.
-	c, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Authorization": {"Bearer secret"}})
+	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}

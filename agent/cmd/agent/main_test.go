@@ -1,0 +1,521 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/retransmit/docker-mobile/agent/internal/config"
+	"github.com/retransmit/docker-mobile/agent/internal/tlsid"
+)
+
+func TestMain(m *testing.M) {
+	// Streams never end by themselves, so every test that stops an agent
+	// with one open would wait the whole grace.
+	shutdownGrace = 200 * time.Millisecond
+	os.Exit(m.Run())
+}
+
+// syncBuf is a buffer a command can write to while the test reads it.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func waitFor(t *testing.T, what string, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// fakeDocker answers lists at once and keeps /events open until the caller
+// goes away.
+func fakeDocker(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/events") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("{\"Type\":\"container\"}\n"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"Id":"x"}]`))
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// agent is a running agent under test.
+type agent struct {
+	t      *testing.T
+	env    map[string]string
+	addr   string
+	log    *syncBuf
+	cancel context.CancelFunc
+	done   chan error
+}
+
+func (a *agent) getenv(k string) string { return a.env[k] }
+
+// startAgent runs serve in the background on a free port with a fresh state
+// folder. extra is more environment, as key, value pairs.
+func startAgent(t *testing.T, extra ...string) *agent {
+	t.Helper()
+	// A short path: the admin socket lives in it, and a unix socket path
+	// may not exceed about a hundred bytes.
+	dataDir, err := os.MkdirTemp("", "dma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dataDir) })
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listen := probe.Addr().String()
+	probe.Close()
+
+	a := &agent{t: t, log: &syncBuf{}, done: make(chan error, 1), env: map[string]string{
+		"AGENT_DATA":      dataDir,
+		"AGENT_LISTEN":    listen,
+		"AGENT_ADVERTISE": "127.0.0.1",
+		"AGENT_NAME":      "test agent",
+		"DOCKER_HOST":     "tcp://" + fakeDocker(t).Listener.Addr().String(),
+	}}
+	for i := 0; i+1 < len(extra); i += 2 {
+		a.env[extra[i]] = extra[i+1]
+	}
+	cfg, err := config.Load(a.getenv, false)
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	ready := make(chan net.Addr, 1)
+	go func() {
+		a.done <- serve(ctx, cfg, slog.New(slog.NewTextHandler(a.log, nil)), func(addr net.Addr) { ready <- addr })
+	}()
+	select {
+	case addr := <-ready:
+		a.addr = addr.String()
+	case err := <-a.done:
+		t.Fatalf("serve ended at once: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent did not start")
+	}
+	t.Cleanup(func() { a.stop() })
+	return a
+}
+
+// stop ends the agent and returns what serve returned. It may be called
+// more than once.
+func (a *agent) stop() error {
+	a.cancel()
+	select {
+	case err := <-a.done:
+		a.done <- err
+		return err
+	case <-time.After(5 * time.Second):
+		a.t.Fatal("the agent did not stop")
+		return nil
+	}
+}
+
+// command runs one command line against this agent's environment.
+func (a *agent) command(args ...string) (code int, stdout, stderr string) {
+	var out, errOut syncBuf
+	code = run(context.Background(), args, a.getenv, &out, &errOut)
+	return code, out.String(), errOut.String()
+}
+
+// fingerprint is what the agent's state folder says its identity is.
+func (a *agent) fingerprint() tlsid.Fingerprint {
+	a.t.Helper()
+	fp, err := tlsid.ReadFingerprint(a.env["AGENT_DATA"])
+	if err != nil {
+		a.t.Fatalf("read the fingerprint: %v", err)
+	}
+	return fp
+}
+
+// phone plays the app: it pins a fingerprint the way the app does and
+// carries a token.
+type phone struct {
+	t      *testing.T
+	scheme string
+	addr   string
+	pin    *tlsid.Fingerprint // nil until the phone trusts a certificate
+	seen   tlsid.Fingerprint  // what the last handshake presented
+	token  string
+	client *http.Client
+}
+
+func newPhone(t *testing.T, scheme, addr string) *phone {
+	p := &phone{t: t, scheme: scheme, addr: addr}
+	p.client = &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+		TLSClientConfig: &tls.Config{
+			// The agent's certificate is self-signed, so the chain check
+			// cannot pass. Like the app, the phone replaces it with a
+			// stricter one: the key must be exactly the pinned one.
+			InsecureSkipVerify: true,
+			VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
+				fp, err := tlsid.FingerprintOfDER(raw[0])
+				if err != nil {
+					return err
+				}
+				p.seen = fp
+				if p.pin != nil && fp != *p.pin {
+					return errors.New("server identity changed")
+				}
+				return nil
+			},
+		},
+	}}
+	return p
+}
+
+// pinned returns a phone that already trusts this agent's certificate.
+func (a *agent) pinned(token string) *phone {
+	p := newPhone(a.t, "https", a.addr)
+	fp := a.fingerprint()
+	p.pin, p.token = &fp, token
+	return p
+}
+
+func (p *phone) do(method, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequest(method, p.scheme+"://"+p.addr+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	if p.token != "" {
+		req.Header.Set("Authorization", "Bearer "+p.token)
+	}
+	return p.client.Do(req)
+}
+
+func (p *phone) status(method, path string) int {
+	p.t.Helper()
+	resp, err := p.do(method, path, nil)
+	if err != nil {
+		p.t.Fatalf("%s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+const shared = "a-shared-token-of-enough-length"
+
+func TestTheSharedTokenWorksOverThePinnedCertificate(t *testing.T) {
+	a := startAgent(t, "AGENT_TOKEN", shared)
+	log := a.log.String()
+	if !strings.Contains(log, "AGENT_TOKEN is set") || !strings.Contains(log, "AGENT_TOKEN is short") {
+		t.Fatalf("the log lacks the notice or the warning about the shared token: %s", log)
+	}
+	if strings.Contains(log, shared) {
+		t.Fatal("the shared token is in the log")
+	}
+	p := a.pinned(shared)
+	if got := p.status("GET", "/v1.45/containers/json"); got != http.StatusOK {
+		t.Fatalf("code = %d, want 200", got)
+	}
+	p.token = "wrong"
+	if got := p.status("GET", "/containers/json"); got != http.StatusUnauthorized {
+		t.Fatalf("code = %d, want 401", got)
+	}
+}
+
+func TestAFreshAgentSaysHowToPairAndPrintsNoCode(t *testing.T) {
+	a := startAgent(t)
+	log := a.log.String()
+	if !strings.Contains(log, "no phone is paired yet") || !strings.Contains(log, "docker-mobile-agent pair") {
+		t.Fatalf("log = %s", log)
+	}
+	if !strings.Contains(log, "fingerprint="+a.fingerprint().Display()) {
+		t.Fatalf("the fingerprint is not in the startup log: %s", log)
+	}
+	if strings.Contains(log, "dockermobile://") {
+		t.Fatal("a pairing link was written to the log")
+	}
+}
+
+func TestTheFingerprintCommandPrintsWhatThePortPresents(t *testing.T) {
+	a := startAgent(t)
+	p := newPhone(t, "https", a.addr)
+	p.status("GET", "/healthz")
+	code, out, errOut := a.command("fingerprint")
+	if code != 0 || strings.TrimSpace(out) != p.seen.Display() {
+		t.Fatalf("fingerprint: exit %d, %q (stderr %q); the port presents %q", code, out, errOut, p.seen.Display())
+	}
+}
+
+func TestHealthcheck(t *testing.T) {
+	a := startAgent(t)
+	if code, _, errOut := a.command("healthcheck"); code != 0 {
+		t.Fatalf("healthcheck of a running agent failed: %s", errOut)
+	}
+	a.stop()
+	if code, _, _ := a.command("healthcheck"); code != 1 {
+		t.Fatalf("healthcheck of a stopped agent: exit %d, want 1", code)
+	}
+}
+
+func TestPlainHTTPMode(t *testing.T) {
+	a := startAgent(t, "AGENT_INSECURE_HTTP", "1", "AGENT_ADVERTISE", "https://docker.example.com", "AGENT_TOKEN", shared)
+	if !strings.Contains(a.log.String(), "serving plain HTTP") {
+		t.Fatalf("no warning about plain HTTP in the log: %s", a.log.String())
+	}
+	p := newPhone(t, "http", a.addr)
+	p.token = shared
+	if got := p.status("GET", "/containers/json"); got != http.StatusOK {
+		t.Fatalf("code = %d, want 200", got)
+	}
+	if code, _, errOut := a.command("healthcheck"); code != 0 {
+		t.Fatalf("healthcheck failed: %s", errOut)
+	}
+	if code, _, errOut := a.command("fingerprint"); code != 1 || !strings.Contains(errOut, "no certificate") {
+		t.Fatalf("fingerprint in plain-HTTP mode: %d %q", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(a.env["AGENT_DATA"], "tls.key")); !os.IsNotExist(err) {
+		t.Fatal("plain-HTTP mode created a TLS key")
+	}
+}
+
+func TestStoppingTheAgentEndsStreamsAndCleansUp(t *testing.T) {
+	a := startAgent(t, "AGENT_TOKEN", shared)
+	before := a.fingerprint()
+	p := a.pinned(shared)
+	stream, err := p.do("GET", "/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if _, err := io.ReadFull(stream.Body, make([]byte, 1)); err != nil {
+		t.Fatalf("the stream did not start: %v", err)
+	}
+
+	began := time.Now()
+	if err := a.stop(); err != nil {
+		t.Fatalf("serve returned %v", err)
+	}
+	if took := time.Since(began); took > 3*time.Second {
+		t.Fatalf("stopping took %v", took)
+	}
+	ended := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, stream.Body)
+		close(ended)
+	}()
+	select {
+	case <-ended:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the stream outlived the agent")
+	}
+	if _, err := os.Stat(filepath.Join(a.env["AGENT_DATA"], "admin.sock")); !os.IsNotExist(err) {
+		t.Fatalf("the admin socket was left behind: %v", err)
+	}
+
+	// The same folder starts again with the same identity.
+	again := startAgent(t, "AGENT_DATA", a.env["AGENT_DATA"], "AGENT_TOKEN", shared)
+	if again.fingerprint() != before {
+		t.Fatal("the fingerprint changed across a restart")
+	}
+	if got := again.pinned(shared).status("GET", "/containers/json"); got != http.StatusOK {
+		t.Fatalf("after a restart: %d, want 200", got)
+	}
+}
+
+func TestASecondAgentOnTheSameFolderIsRefused(t *testing.T) {
+	a := startAgent(t)
+	env := func(k string) string {
+		if k == "AGENT_LISTEN" {
+			return "127.0.0.1:0"
+		}
+		return a.env[k]
+	}
+	var errOut bytes.Buffer
+	if code := run(context.Background(), []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
+		t.Fatalf("a second agent: exit %d, %s", code, errOut.String())
+	}
+}
+
+func TestASecondAgentIsRefusedBeforeItTouchesTheState(t *testing.T) {
+	a := startAgent(t)
+	// Damage the device list on disk. A second agent that read the state
+	// before taking the admin socket would stop on this file instead.
+	if err := os.WriteFile(filepath.Join(a.env["AGENT_DATA"], "devices.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(k string) string {
+		if k == "AGENT_LISTEN" {
+			return "127.0.0.1:0"
+		}
+		return a.env[k]
+	}
+	var errOut bytes.Buffer
+	if code := run(context.Background(), []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
+		t.Fatalf("a second agent: exit %d, %s", code, errOut.String())
+	}
+}
+
+func TestTheStateFolderStaysLockedUntilRequestsHaveStopped(t *testing.T) {
+	// A longer grace for this test: with a stream open, stopping takes all
+	// of it, which leaves time to try a second agent meanwhile.
+	old := shutdownGrace
+	shutdownGrace = 2 * time.Second
+	t.Cleanup(func() { shutdownGrace = old })
+
+	a := startAgent(t, "AGENT_TOKEN", shared)
+	stream, err := a.pinned(shared).do("GET", "/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if _, err := io.ReadFull(stream.Body, make([]byte, 1)); err != nil {
+		t.Fatalf("the stream did not start: %v", err)
+	}
+
+	a.cancel()
+	waitFor(t, "the agent to begin stopping", func() bool { return strings.Contains(a.log.String(), "stopping") })
+
+	// The first agent is still letting its stream finish. A second one on the
+	// same folder must be refused now; if it were let in, it would serve
+	// until its own context ends and exit cleanly.
+	env := func(k string) string {
+		if k == "AGENT_LISTEN" {
+			return "127.0.0.1:0"
+		}
+		return a.env[k]
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	var errOut bytes.Buffer
+	if code := run(ctx, []string{"serve"}, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "already running") {
+		t.Fatalf("a second agent while the first is stopping: exit %d, %s", code, errOut.String())
+	}
+	if err := a.stop(); err != nil {
+		t.Fatalf("serve returned %v", err)
+	}
+}
+
+func TestAPortInUseIsAClearError(t *testing.T) {
+	a := startAgent(t)
+	dataDir, err := os.MkdirTemp("", "dma")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dataDir)
+	env := func(k string) string {
+		switch k {
+		case "AGENT_DATA":
+			return dataDir
+		case "AGENT_LISTEN":
+			return a.addr
+		}
+		return ""
+	}
+	var errOut bytes.Buffer
+	if code := run(context.Background(), nil, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "listen on "+a.addr) {
+		t.Fatalf("a port in use: exit %d, %s", code, errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "admin.sock")); !os.IsNotExist(err) {
+		t.Fatal("the admin socket was left behind after a failed start")
+	}
+}
+
+func TestAnUnusableStateFolderIsAClearError(t *testing.T) {
+	notAFolder := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(notAFolder, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := func(k string) string {
+		switch k {
+		case "AGENT_DATA":
+			return notAFolder
+		case "AGENT_LISTEN":
+			return "127.0.0.1:0"
+		}
+		return ""
+	}
+	var errOut bytes.Buffer
+	if code := run(context.Background(), nil, env, io.Discard, &errOut); code != 1 || !strings.Contains(errOut.String(), "state folder") {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+}
+
+// commandCase is one command line and what it must produce.
+type commandCase struct {
+	name     string
+	args     []string
+	env      []string // key, value pairs on top of an empty state folder
+	code     int
+	inStdout string
+	inStderr string
+}
+
+func runCommandCases(t *testing.T, cases []commandCase) {
+	t.Helper()
+	for _, c := range cases {
+		m := map[string]string{"AGENT_DATA": t.TempDir()}
+		for i := 0; i+1 < len(c.env); i += 2 {
+			m[c.env[i]] = c.env[i+1]
+		}
+		var out, errOut bytes.Buffer
+		code := run(context.Background(), c.args, func(k string) string { return m[k] }, &out, &errOut)
+		if code != c.code {
+			t.Errorf("%s: exit %d, want %d (stderr: %s)", c.name, code, c.code, errOut.String())
+		}
+		if c.inStdout != "" && !strings.Contains(out.String(), c.inStdout) {
+			t.Errorf("%s: stdout lacks %q: %s", c.name, c.inStdout, out.String())
+		}
+		if c.inStderr != "" && !strings.Contains(errOut.String(), c.inStderr) {
+			t.Errorf("%s: stderr lacks %q: %s", c.name, c.inStderr, errOut.String())
+		}
+	}
+}
+
+func TestCommandLine(t *testing.T) {
+	runCommandCases(t, []commandCase{
+		{name: "unknown command", args: []string{"frobnicate"}, code: 2, inStderr: `unknown command "frobnicate"`},
+		{name: "help", args: []string{"help"}, code: 0, inStdout: "docker-mobile-agent fingerprint"},
+		{name: "version", args: []string{"version"}, code: 0, inStdout: "docker-mobile-agent dev (commit "},
+		{name: "fingerprint before the first run", args: []string{"fingerprint"}, code: 1, inStderr: "no certificate"},
+		{name: "a short shared token", env: []string{"AGENT_TOKEN", "too-short"}, code: 1, inStderr: "AGENT_TOKEN is too short (9 characters)"},
+		{name: "a bad listen address", args: []string{"serve"}, env: []string{"AGENT_LISTEN", "nope"}, code: 1, inStderr: "AGENT_LISTEN"},
+		{name: "a bad flag for serve", args: []string{"--verbose"}, code: 1, inStderr: "flag provided but not defined"},
+		{name: "healthcheck without an agent", args: []string{"healthcheck", "--insecure-http"}, env: []string{"AGENT_LISTEN", "127.0.0.1:1"}, code: 1},
+	})
+}
