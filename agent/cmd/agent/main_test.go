@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -470,6 +471,46 @@ func TestGarbageOnTheTLSPortLeavesNoLineAndTheAgentKeepsServing(t *testing.T) {
 	if log := a.log.String(); strings.Contains(log, "handshake") || strings.Contains(log, "level=ERROR") {
 		t.Fatalf("the failed handshake is in the log: %s", log)
 	}
+}
+
+func TestOptionsForTheWholeServerIsAnsweredByTheHandlerAndItsConnectionClosed(t *testing.T) {
+	// This test waits until the limit on a body has passed, so it is short.
+	old := requestTimeout
+	requestTimeout = 250 * time.Millisecond
+	t.Cleanup(func() { requestTimeout = old })
+
+	a := startAgent(t)
+	pinned := a.pinned("").client.Transport.(*http.Transport).TLSClientConfig
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", a.addr, pinned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// An agent that does not answer, or keeps the connection, fails a check
+	// below instead of hanging the test.
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	began := time.Now()
+	// OPTIONS * asks about the server as a whole, and net/http would answer
+	// it without asking the handler. This one announces a body and sends none.
+	if _, err := io.WriteString(conn, "OPTIONS * HTTP/1.1\r\nHost: agent\r\nContent-Length: 17\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	answers := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(answers, nil)
+	if err != nil {
+		t.Fatalf("no answer after %v: %v", time.Since(began).Round(time.Millisecond), err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	// The answer of the agent's router. net/http by itself says 200.
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400", resp.StatusCode)
+	}
+	if _, err := answers.ReadByte(); err != io.EOF {
+		t.Fatalf("the connection is still open after %v: %v", time.Since(began).Round(time.Millisecond), err)
+	}
+	// The request went the way every request goes: the access log has it.
+	waitFor(t, "the request in the access log", func() bool { return strings.Contains(a.log.String(), "method=OPTIONS") })
 }
 
 func TestTheFingerprintCommandPrintsWhatThePortPresents(t *testing.T) {

@@ -34,6 +34,11 @@ import (
 // that tests can shorten it.
 var shutdownGrace = 5 * time.Second
 
+// requestTimeout is how long a caller without credentials may take over the
+// body of a request. Zero leaves it at the handler's own 10 seconds. It is a
+// variable so that tests can shorten it.
+var requestTimeout time.Duration
+
 // serverLog hands what net/http reports to the agent's log, except failed
 // TLS handshakes: on an open port those are mostly scanners.
 type serverLog struct{ log *slog.Logger }
@@ -112,15 +117,16 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 	registry := conns.New()
 	manager := pairing.NewManager(time.Now, rand.Reader)
 	handler, err := server.New(server.Options{
-		DockerHost:  cfg.DockerHost,
-		Devices:     devices,
-		LegacyToken: cfg.LegacyToken,
-		Pairing:     manager,
-		Fingerprint: fingerprint,
-		Limiter:     throttle.New(time.Now),
-		Conns:       registry,
-		Version:     version,
-		Log:         logger,
+		DockerHost:     cfg.DockerHost,
+		Devices:        devices,
+		LegacyToken:    cfg.LegacyToken,
+		Pairing:        manager,
+		Fingerprint:    fingerprint,
+		Limiter:        throttle.New(time.Now),
+		Conns:          registry,
+		Version:        version,
+		RequestTimeout: requestTimeout,
+		Log:            logger,
 	})
 	if err != nil {
 		return err
@@ -154,6 +160,11 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    64 << 10,
 		ErrorLog:          errorLog,
+		// net/http would answer OPTIONS * itself, before the handler and
+		// without the handler's limit on how long a body may take: such a
+		// request could announce a body, never send it, and keep its
+		// connection. Here every request goes through the handler.
+		DisableGeneralOptionsHandler: true,
 	}
 	// Requests on the admin socket end when the agent begins to stop. The
 	// socket itself stays to the end, and with it the lock on the folder.
@@ -164,6 +175,8 @@ func serve(ctx context.Context, cfg config.Config, logger *slog.Logger, ready fu
 		ReadHeaderTimeout: 10 * time.Second,
 		ErrorLog:          errorLog,
 		BaseContext:       func(net.Listener) context.Context { return adminCtx },
+		// Here too every request goes through the handler.
+		DisableGeneralOptionsHandler: true,
 	}
 
 	logger.Info("docker-mobile-agent started", "version", version, "listen", ln.Addr().String(), "docker", cfg.DockerHost, "data", cfg.DataDir)

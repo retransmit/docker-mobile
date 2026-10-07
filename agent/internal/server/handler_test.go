@@ -697,16 +697,18 @@ func TestNewNamesTheRequiredOptionThatIsMissing(t *testing.T) {
 		"Pairing": func(o *Options) { o.Pairing = nil },
 		"Limiter": func(o *Options) { o.Limiter = nil },
 		"Conns":   func(o *Options) { o.Conns = nil },
+		// Not missing, but of no use: a limit that has passed before it begins.
+		"RequestTimeout": func(o *Options) { o.RequestTimeout = -time.Second },
 	} {
 		o := requiredOptions(t)
 		without(&o)
 		h, err := New(o)
 		if err == nil || h != nil {
-			t.Errorf("New without %s built a handler", name)
+			t.Errorf("New without a usable %s built a handler", name)
 			continue
 		}
 		if !strings.Contains(err.Error(), name) {
-			t.Errorf("New without %s: the error does not name it: %v", name, err)
+			t.Errorf("New without a usable %s: the error does not name it: %v", name, err)
 		}
 	}
 	// With several missing, the first one is named.
@@ -904,6 +906,39 @@ func TestACallerWithCredentialsMayTakeItsTimeOverTheBody(t *testing.T) {
 	}
 	if seen := f.daemon.requests(); len(seen) != 1 || !strings.HasSuffix(seen[0], " "+body) {
 		t.Fatalf("the daemon saw %q, want the one request with its body", seen)
+	}
+}
+
+func TestARequestWithoutABodyIsNotPutUnderTheReadDeadline(t *testing.T) {
+	// What stands behind the deadline takes longer than the limit before it
+	// answers, as an authentication does that has to wait for the disk or for
+	// a pairing. It answers 200 when the context of its request is still
+	// alive by then.
+	slow := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * requestTimeout)
+		if err := r.Context().Err(); err != nil {
+			http.Error(w, "the context of the request has ended: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte("alive"))
+	})
+	srv := httptest.NewServer(readDeadline(requestTimeout, slow))
+	t.Cleanup(srv.Close)
+	conn := dial(t, srv.Listener.Addr().String(), 4*requestTimeout+patience)
+	answers := bufio.NewReader(conn)
+	for _, which := range []string{"a request without a body", "a second one on the same connection"} {
+		if _, err := io.WriteString(conn, "GET /containers/json HTTP/1.1\r\nHost: agent\r\n\r\n"); err != nil {
+			t.Fatalf("%s: %v", which, err)
+		}
+		resp, err := http.ReadResponse(answers, nil)
+		if err != nil {
+			t.Fatalf("%s: no answer: %v", which, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK || string(body) != "alive" {
+			t.Errorf("%s: %d %q, %v, want 200 from a handler whose context is alive", which, resp.StatusCode, strings.TrimSpace(string(body)), err)
+		}
 	}
 }
 

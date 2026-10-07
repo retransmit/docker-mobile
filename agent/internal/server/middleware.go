@@ -33,32 +33,36 @@ var uploads = regexp.MustCompile(`^(/v[0-9]+\.[0-9]+)?(/build|/images/load|/cont
 // gets to send the rest of its request once the headers are in.
 const defaultRequestTimeout = 10 * time.Second
 
-// readDeadline puts every request under a read deadline, d from now, before
-// anything else looks at it. net/http reads the rest of a request's body
-// before it sends the answer, and the agent's server bounds only how long the
-// headers may take. Without this deadline a request that announces a body and
-// never sends it would get no answer and keep its connection for good.
+// readDeadline puts a request that announces a body under a read deadline, d
+// from now, before anything else looks at it. net/http reads the rest of a
+// request's body before it sends the answer, and the agent's server bounds
+// only how long the headers may take. Without this deadline a request that
+// announces a body and never sends it would get no answer and keep its
+// connection for good. A body of unknown length is announced as well.
+//
+// A request without a body is left alone: nothing of it is still to come,
+// and the deadline would only do harm. It belongs to the connection, and
+// while the handler of such a request runs, net/http keeps a read pending on
+// the connection: that is how it notices a client that went away. A deadline
+// that passes fails that read, and the context of the connection ends with
+// it, for this request and for every later one on the connection. That would
+// hit a caller whose credentials merely take longer than d to check.
 //
 // A writer that cannot set a deadline is not an error, so what
 // SetReadDeadline returns is ignored: the recorder of a test has no
 // connection that could be kept.
 func readDeadline(d time.Duration, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
+		if r.ContentLength != 0 {
+			http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
+		}
 		next.ServeHTTP(w, r)
 	})
 }
 
 // liftReadDeadline takes the read deadline off again. It stands directly
-// behind authentication: a paired device uploads build contexts and images
-// and holds streams and terminals open, and none of that may be cut.
-//
-// A request without a body needs this as much as an upload. The deadline
-// belongs to the connection, and net/http keeps a read pending on the
-// connection while a handler runs: that is how it notices a client that went
-// away. A deadline that passes fails that read, and the request's context
-// ends with it. A stream left under the deadline would end when the time is
-// up.
+// behind authentication: a paired device uploads build contexts and images,
+// and a body of that kind takes as long as it takes.
 func liftReadDeadline(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NewResponseController(w).SetReadDeadline(time.Time{})
