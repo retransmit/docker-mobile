@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/retransmit/docker-mobile/agent/internal/config"
@@ -21,7 +23,30 @@ import (
 	"github.com/retransmit/docker-mobile/agent/internal/state"
 )
 
-const socketName = "admin.sock"
+const (
+	socketName = "admin.sock"
+	// lockName is the file an agent keeps locked for as long as it serves
+	// the state folder.
+	lockName = "agent.lock"
+	// maxSocketPath is the longest socket path that works everywhere. The
+	// address of a unix socket holds 104 bytes on macOS and the BSDs and 108
+	// on Linux and Windows, the zero byte that ends the path included.
+	maxSocketPath = 103
+)
+
+// errLocked means the lock of the state folder is held.
+var errLocked = errors.New("locked")
+
+// checkSocketPath refuses a state folder whose admin socket would have a
+// path longer than a socket address can hold. Without it the failure would
+// read as "invalid argument" in the agent and as no agent running in the
+// command line.
+func checkSocketPath(path string) error {
+	if len(path) > maxSocketPath {
+		return fmt.Errorf("the state folder path is too long for the admin socket: %s is %d bytes, the limit is %d", path, len(path), maxSocketPath)
+	}
+	return nil
+}
 
 // PairRequest starts a pairing.
 type PairRequest struct {
@@ -101,18 +126,39 @@ type Server struct {
 	After func(time.Duration) <-chan time.Time
 }
 
-// Listen opens the admin socket in dir, replacing a stale one. It refuses
-// when another agent is already serving that folder.
+// Listen takes the state folder for this agent and opens the admin socket in
+// it. It refuses when another agent is already serving that folder.
+//
+// What says so is a lock on a file in the folder, held for as long as the
+// returned listener is open. The operating system drops the lock when the
+// process ends, however it ends, so a lock that is held always means a live
+// agent. A socket file found once the lock is taken was left behind by an
+// agent that died, and is replaced. Closing the listener removes the socket
+// and gives the folder up.
 func Listen(dir *state.Dir) (net.Listener, error) {
-	path := dir.Path(socketName)
-	if _, err := os.Stat(path); err == nil {
-		if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
-			c.Close()
-			return nil, errors.New("another agent is already running on this state folder")
-		}
-		if err := os.Remove(path); err != nil {
-			return nil, fmt.Errorf("remove stale admin socket: %w", err)
-		}
+	if err := checkSocketPath(dir.Path(socketName)); err != nil {
+		return nil, err
+	}
+	lock, err := lockFile(dir.Path(lockName))
+	if errors.Is(err, errLocked) {
+		return nil, errors.New("another agent is already running on this state folder")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lock the state folder: %w", err)
+	}
+	ln, err := listenLocked(dir.Path(socketName))
+	if err != nil {
+		lock.Close()
+		return nil, err
+	}
+	return &lockedListener{Listener: ln, lock: lock}, nil
+}
+
+// listenLocked opens the admin socket at path, in place of whatever is
+// there. The caller holds the lock of the folder.
+func listenLocked(path string) (net.Listener, error) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("remove stale admin socket: %w", err)
 	}
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -123,6 +169,29 @@ func Listen(dir *state.Dir) (net.Listener, error) {
 		return nil, fmt.Errorf("admin socket: %w", err)
 	}
 	return ln, nil
+}
+
+// lockedListener is the admin socket together with the lock of its folder.
+type lockedListener struct {
+	net.Listener
+	lock *os.File
+
+	once sync.Once
+	err  error
+}
+
+// Close closes the socket and then gives the folder up. Calling it again
+// does nothing and returns what the first call returned.
+func (l *lockedListener) Close() error {
+	l.once.Do(func() {
+		// The socket goes first. Closing it removes whatever is at its path,
+		// and once the lock is free that may be the socket of the next agent.
+		l.err = l.Listener.Close()
+		if err := l.lock.Close(); err != nil && l.err == nil {
+			l.err = fmt.Errorf("release the state folder: %w", err)
+		}
+	})
+	return l.err
 }
 
 // Handler returns the admin API.
@@ -217,18 +286,30 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 	s.logf("pairing started", "role", string(p.Role))
 
 	var result pairing.Result
+	left := false
 	select {
 	case result = <-done:
 	case <-s.after(p.ExpiresAt.Sub(s.now())):
 		s.Pairing.Expire(p.ID)
 		result = <-done
 	case <-r.Context().Done():
-		// The command line went away: the code must not stay usable.
+		// The command line went away: the code must not stay usable. The
+		// pairing may have ended a moment before, even with a device stored,
+		// and Cancel then changes nothing. So the result is read, not assumed.
 		s.Pairing.Cancel(p.ID)
-		s.logf("pairing ended", "outcome", string(pairing.Cancelled))
+		result = <-done
+		left = true
+	}
+	if result.Outcome == pairing.Paired {
+		s.logf("pairing ended", "outcome", string(result.Outcome), "device", result.Device.ID, "name", result.Device.Name)
+	} else {
+		s.logf("pairing ended", "outcome", string(result.Outcome))
+	}
+	if left {
+		// No ending event: the request is over, so the stream just breaks
+		// off after "started".
 		return
 	}
-	s.logf("pairing ended", "outcome", string(result.Outcome))
 	e := Event{Event: string(result.Outcome), Error: result.Err}
 	if result.Outcome == pairing.Paired {
 		info := infoOf(result.Device)

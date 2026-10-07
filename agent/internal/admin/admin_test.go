@@ -4,13 +4,20 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -45,6 +52,31 @@ type fixture struct {
 	conns   *conns.Registry
 	expire  chan time.Time
 	log     *lockedBuffer
+
+	mu    sync.Mutex
+	armed []time.Duration // what the expiry timer was armed with, in order
+}
+
+// timers returns what the server has armed its expiry timer with so far.
+func (f *fixture) timers() []time.Duration {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]time.Duration(nil), f.armed...)
+}
+
+// steppingClock moves on by a second every time it is read, so that two
+// things made one after the other never carry the same time, however coarse
+// the clock of the machine is.
+type steppingClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *steppingClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(time.Second)
+	return c.t
 }
 
 // lockedBuffer is a log sink the test can read while the server writes.
@@ -71,8 +103,14 @@ var agentFP = bytes.Repeat([]byte{7}, 32)
 // before the server starts: its fields must not change afterwards.
 func start(t *testing.T, configure ...func(*Server)) *fixture {
 	t.Helper()
+	return startAt(t, time.Now, configure...)
+}
+
+// startAt is start with the clock the device list reads.
+func startAt(t *testing.T, now func() time.Time, configure ...func(*Server)) *fixture {
+	t.Helper()
 	dir := shortDir(t)
-	devices, err := state.LoadDevices(dir, time.Now)
+	devices, err := state.LoadDevices(dir, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +131,12 @@ func start(t *testing.T, configure ...func(*Server)) *fixture {
 		FingerprintDisplay: "SHA256:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc",
 		AgentName:          "home lab",
 		Log:                slog.New(slog.NewTextHandler(f.log, nil)),
-		After:              func(time.Duration) <-chan time.Time { return f.expire },
+		After: func(d time.Duration) <-chan time.Time {
+			f.mu.Lock()
+			f.armed = append(f.armed, d)
+			f.mu.Unlock()
+			return f.expire
+		},
 	}
 	for _, c := range configure {
 		c(f.server)
@@ -201,7 +244,11 @@ func TestPairEndsAsExpiredWhenTheCodeRunsOut(t *testing.T) {
 	if started.Role != "full" {
 		t.Fatalf("the default role = %q, want full", started.Role)
 	}
+	// The handler takes this only once it waits, so its timer is armed by now.
 	f.expire <- time.Now()
+	if armed := f.timers(); len(armed) != 1 || armed[0] > pairing.Lifetime || armed[0] < pairing.Lifetime-5*time.Second {
+		t.Fatalf("the expiry timer was armed with %v, want once, with what is left of the %v a code lives", armed, pairing.Lifetime)
+	}
 	if e := next(t, events); e.Event != "expired" {
 		t.Fatalf("event = %+v", e)
 	}
@@ -302,9 +349,11 @@ func TestPairBehindAProxyCarriesASchemeInsteadOfAFingerprint(t *testing.T) {
 }
 
 func TestDevicesListsWithoutTokenHashes(t *testing.T) {
-	f := start(t)
+	// The list is ordered by when a device was paired, so the two get times
+	// that differ whatever the clock of the machine does.
+	clock := &steppingClock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	f := startAt(t, clock.Now)
 	a, _, _ := f.devices.Add("a", state.RoleFull)
-	time.Sleep(2 * time.Millisecond)
 	b, _, _ := f.devices.Add("b", state.RoleReadOnly)
 	list, err := f.client.Devices(context.Background())
 	if err != nil {
@@ -362,6 +411,170 @@ func TestWithoutARunningAgentTheClientSaysSo(t *testing.T) {
 	if err := c.Pair(context.Background(), PairRequest{}, func(Event) {}); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Pair err = %v, want ErrNotRunning", err)
 	}
+
+	// A state folder that was never created.
+	missing := filepath.Join(shortDir(t).Path(""), "missing")
+	if _, err := NewClient(missing).Devices(context.Background()); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("without the folder: err = %v, want ErrNotRunning", err)
+	}
+
+	// A socket that an agent left behind when it died: nobody listens on it.
+	dir := shortDir(t)
+	dead, err := net.Listen("unix", dir.Path(socketName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.(*net.UnixListener).SetUnlinkOnClose(false)
+	dead.Close()
+	if _, err := NewClient(dir.Path("")).Devices(context.Background()); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("with a socket nobody listens on: err = %v, want ErrNotRunning", err)
+	}
+}
+
+func TestTheClientSaysWhyItCouldNotReachTheAgent(t *testing.T) {
+	// A file stands in for the socket, so that the cause of the failed
+	// connection is all that differs between the cases.
+	path := shortDir(t).Path(socketName)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failed := func(cause syscall.Errno) error {
+		return dialFailure(path, &net.OpError{Op: "dial", Net: "unix", Err: os.NewSyscallError("connect", cause)})
+	}
+
+	denied := failed(syscall.EACCES)
+	if !errors.Is(denied, ErrNoAccess) || errors.Is(denied, ErrNotRunning) {
+		t.Fatalf("permission denied: err = %v, want ErrNoAccess", denied)
+	}
+	if !strings.Contains(denied.Error(), "the user the agent runs as") {
+		t.Fatalf("permission denied: the error does not say what to do: %v", denied)
+	}
+
+	other := failed(syscall.EMFILE)
+	if errors.Is(other, ErrNotRunning) || errors.Is(other, ErrNoAccess) {
+		t.Fatalf("another failure was taken for one of the known ones: %v", other)
+	}
+	if !strings.Contains(other.Error(), syscall.EMFILE.Error()) {
+		t.Fatalf("another failure lost its cause: %v", other)
+	}
+}
+
+func TestTheClientSaysWhenTheStateFolderBelongsToAnotherUser(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs file modes, and a user they hold for")
+	}
+	f := start(t)
+	// What a user other than the agent's finds: a folder that may not be
+	// entered, with a running agent behind it.
+	folder := f.dir.Path("")
+	if err := os.Chmod(folder, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(folder, 0o700) })
+	_, err := f.client.Devices(context.Background())
+	if !errors.Is(err, ErrNoAccess) || errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Devices err = %v, want ErrNoAccess", err)
+	}
+	err = f.client.Pair(context.Background(), PairRequest{}, func(Event) {})
+	if !errors.Is(err, ErrNoAccess) {
+		t.Fatalf("Pair err = %v, want ErrNoAccess", err)
+	}
+}
+
+func TestAStateFolderPathTooLongForTheSocketIsAClearError(t *testing.T) {
+	if err := checkSocketPath(strings.Repeat("x", maxSocketPath)); err != nil {
+		t.Fatalf("a socket path of exactly %d bytes: %v", maxSocketPath, err)
+	}
+	if err := checkSocketPath(strings.Repeat("x", maxSocketPath+1)); err == nil {
+		t.Fatalf("a socket path of %d bytes was accepted", maxSocketPath+1)
+	}
+
+	dir, err := state.Open(filepath.Join(shortDir(t).Path(""), strings.Repeat("x", 100)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	length := strconv.Itoa(len(dir.Path(socketName)))
+	check := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s: no error for a socket path of %s bytes", what, length)
+			return
+		}
+		for _, want := range []string{"too long", length, strconv.Itoa(maxSocketPath)} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: the error does not say %q: %v", what, want, err)
+			}
+		}
+		if errors.Is(err, ErrNotRunning) {
+			t.Errorf("%s: a path that is too long was reported as no agent running: %v", what, err)
+		}
+	}
+	ln, err := Listen(dir)
+	if err == nil {
+		ln.Close()
+	}
+	check("Listen", err)
+	if _, err := os.Stat(dir.Path(lockName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Listen took the folder before it refused the path: %v", err)
+	}
+	_, err = NewClient(dir.Path("")).Devices(context.Background())
+	check("Devices", err)
+	check("Pair", NewClient(dir.Path("")).Pair(context.Background(), PairRequest{}, func(Event) {}))
+}
+
+func TestAStateFolderPathOfTheLongestLengthWorks(t *testing.T) {
+	base := shortDir(t).Path("")
+	// base, a separator, the folder, a separator and the socket's name.
+	pad := maxSocketPath - len(base) - len(socketName) - 2
+	if pad < 1 {
+		t.Skipf("the temporary folder %s is too long to build a path of %d bytes in", base, maxSocketPath)
+	}
+	dir, err := state.Open(filepath.Join(base, strings.Repeat("x", pad)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(dir.Path(socketName)); n != maxSocketPath {
+		t.Fatalf("the socket path is %d bytes, want %d", n, maxSocketPath)
+	}
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	serve(t, ln)
+	if err := ask(dir); err != nil {
+		t.Fatalf("the agent does not answer: %v", err)
+	}
+}
+
+// serve answers every request on ln until the test ends.
+func serve(t *testing.T, ln net.Listener) {
+	t.Helper()
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})}
+	go srv.Serve(ln)
+	t.Cleanup(func() { srv.Close() })
+}
+
+// ask sends one request to whoever serves the admin socket of dir.
+func ask(dir *state.Dir) error {
+	c := NewClient(dir.Path(""))
+	defer c.http.CloseIdleConnections()
+	resp, err := c.do(context.Background(), http.MethodGet, "/", nil)
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+// refused reports whether Listen turned a second agent away. A listener that
+// was handed out after all is closed, so that it cannot hold the folder.
+func refused(ln net.Listener, err error) bool {
+	if err == nil {
+		ln.Close()
+		return false
+	}
+	return strings.Contains(err.Error(), "already running")
 }
 
 func TestListenRefusesASecondAgentAndReplacesAStaleSocket(t *testing.T) {
@@ -370,21 +583,45 @@ func TestListenRefusesASecondAgentAndReplacesAStaleSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
-	go http.Serve(first, http.NotFoundHandler())
-	if _, err := Listen(dir); err == nil || !strings.Contains(err.Error(), "already running") {
+	serve(t, first)
+	if err := ask(dir); err != nil {
+		t.Fatalf("the first agent does not answer: %v", err)
+	}
+	if ln, err := Listen(dir); !refused(ln, err) {
 		t.Fatalf("a second agent on the same folder: err = %v", err)
 	}
-	first.Close()
-
-	// A socket file nobody listens on is stale and gets replaced.
-	if err := os.WriteFile(dir.Path(socketName), nil, 0o600); err != nil {
+	if err := ask(dir); err != nil {
+		t.Fatalf("the first agent stopped answering once a second one was refused: %v", err)
+	}
+	// The folder stays taken when the socket file is gone: what refuses a
+	// second agent is not whether a socket can be found and reached.
+	if err := os.Remove(dir.Path(socketName)); err != nil {
 		t.Fatal(err)
+	}
+	if ln, err := Listen(dir); !refused(ln, err) {
+		t.Fatalf("a second agent after the socket file was removed: err = %v", err)
+	}
+
+	// An agent that died leaves its socket behind and holds nothing: the
+	// file is replaced.
+	dir = shortDir(t)
+	dead, err := net.Listen("unix", dir.Path(socketName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dead.(*net.UnixListener).SetUnlinkOnClose(false)
+	dead.Close()
+	if _, err := os.Stat(dir.Path(socketName)); err != nil {
+		t.Fatalf("the left-over socket is not there: %v", err)
 	}
 	second, err := Listen(dir)
 	if err != nil {
-		t.Fatalf("Listen over a stale socket: %v", err)
+		t.Fatalf("Listen over a left-over socket: %v", err)
 	}
-	defer second.Close()
+	serve(t, second)
+	if err := ask(dir); err != nil {
+		t.Fatalf("the agent does not answer on the socket it replaced: %v", err)
+	}
 	if runtime.GOOS != "windows" {
 		info, err := os.Stat(dir.Path(socketName))
 		if err != nil {
@@ -393,5 +630,225 @@ func TestListenRefusesASecondAgentAndReplacesAStaleSocket(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Fatalf("socket mode = %v, want 0600", info.Mode().Perm())
 		}
+		info, err = os.Stat(dir.Path(lockName))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("lock file mode = %v, want 0600", info.Mode().Perm())
+		}
+	}
+}
+
+func TestClosingTheListenerFreesTheStateFolder(t *testing.T) {
+	dir := shortDir(t)
+	first, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("closing a second time: %v", err)
+	}
+	if _, err := os.Stat(dir.Path(socketName)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the socket is still there after Close: %v", err)
+	}
+	second, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen after the first listener was closed: %v", err)
+	}
+	serve(t, second)
+	if err := ask(dir); err != nil {
+		t.Fatalf("the second agent does not answer: %v", err)
+	}
+}
+
+func TestAFailedListenDoesNotKeepTheStateFolder(t *testing.T) {
+	dir := shortDir(t)
+	// Something that cannot be removed the way a file can sits where the
+	// socket goes.
+	inTheWay := dir.Path(socketName)
+	if err := os.Mkdir(inTheWay, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inTheWay, "x"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ln, err := Listen(dir); err == nil {
+		ln.Close()
+		t.Fatal("Listen succeeded with a folder where the socket goes")
+	} else if strings.Contains(err.Error(), "already running") {
+		t.Fatalf("err = %v, want what is in the way", err)
+	}
+	if err := os.RemoveAll(inTheWay); err != nil {
+		t.Fatal(err)
+	}
+	ln, err := Listen(dir)
+	if err != nil {
+		t.Fatalf("Listen after one that failed: %v", err)
+	}
+	ln.Close()
+}
+
+func TestOfAgentsStartedTogetherOnlyOneGetsTheStateFolder(t *testing.T) {
+	const rounds, agents = 5, 8
+	for round := 0; round < rounds; round++ {
+		dir := shortDir(t)
+		var (
+			wg  sync.WaitGroup
+			mu  sync.Mutex
+			won []net.Listener
+		)
+		begin := make(chan struct{})
+		for i := 0; i < agents; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-begin
+				ln, err := Listen(dir)
+				if err != nil {
+					if !strings.Contains(err.Error(), "already running") {
+						t.Errorf("round %d: an agent was turned away with %v", round, err)
+					}
+					return
+				}
+				mu.Lock()
+				won = append(won, ln)
+				mu.Unlock()
+			}()
+		}
+		close(begin)
+		wg.Wait()
+		if len(won) != 1 {
+			t.Errorf("round %d: %d agents got the folder, want 1", round, len(won))
+		}
+		for _, ln := range won {
+			ln.Close()
+		}
+	}
+}
+
+// departing is the context of a request whose client leaves at a moment the
+// test picks. Done hands out a channel that is never closed: leave sends on
+// it, and the send returns only when the handler has taken it. So the test
+// knows, without waiting on a clock, that the handler has seen the client go
+// and is past choosing what to do about it.
+type departing struct {
+	context.Context
+	cancel context.CancelFunc
+	gone   chan struct{}
+}
+
+func newDeparting() *departing {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &departing{Context: ctx, cancel: cancel, gone: make(chan struct{})}
+}
+
+func (d *departing) Done() <-chan struct{} { return d.gone }
+
+func (d *departing) leave(t *testing.T) {
+	t.Helper()
+	d.cancel()
+	select {
+	case d.gone <- struct{}{}:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler did not notice that the command line left")
+	}
+}
+
+// lineWriter is a response the test reads line by line while the handler is
+// still running.
+type lineWriter struct {
+	header http.Header
+	lines  chan []byte
+}
+
+func (w *lineWriter) Header() http.Header { return w.header }
+func (w *lineWriter) WriteHeader(int)     {}
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.lines <- bytes.Clone(p)
+	return len(p), nil
+}
+
+func TestTheLogSaysPairedWhenTheCommandLeavesWhileThePhoneRedeems(t *testing.T) {
+	f := start(t)
+	ctx := newDeparting()
+	w := &lineWriter{header: http.Header{}, lines: make(chan []byte, 4)}
+	req := httptest.NewRequest(http.MethodPost, "/pair", strings.NewReader("{}")).WithContext(ctx)
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		f.server.handlePair(w, req)
+	}()
+	var started Event
+	select {
+	case line := <-w.lines:
+		if err := json.Unmarshal(line, &started); err != nil {
+			t.Fatalf("the first line is not an event: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no event arrived")
+	}
+	code, ok := pairing.Normalize(started.Code)
+	if !ok {
+		t.Fatalf("the started event carries no valid code: %q", started.Code)
+	}
+
+	// The phone's proof is right and its device is about to be stored: from
+	// here until release is closed the redeem is under way.
+	storing, release := make(chan struct{}), make(chan struct{})
+	type outcome struct {
+		device state.Device
+		err    error
+	}
+	redeemed := make(chan outcome, 1)
+	go func() {
+		nonce := bytes.Repeat([]byte{4}, pairing.NonceLen)
+		got, err := f.pairing.Redeem(agentFP, nonce, pairing.PhoneProof(code, agentFP, nonce), "Pixel 8",
+			func(name string, role state.Role) (state.Device, string, error) {
+				close(storing)
+				<-release
+				return f.devices.Add(name, role)
+			})
+		redeemed <- outcome{got.Device, err}
+	}()
+	select {
+	case <-storing:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the redeem did not get as far as storing the device")
+	}
+
+	// Now the command line goes away, and only then does the redeem finish.
+	ctx.leave(t)
+	close(release)
+
+	var got outcome
+	select {
+	case got = <-redeemed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the redeem did not return")
+	}
+	if got.err != nil {
+		t.Fatalf("redeem: %v", got.err)
+	}
+	select {
+	case <-returned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler did not return")
+	}
+	if list := f.devices.List(); len(list) != 1 || list[0].ID != got.device.ID {
+		t.Fatalf("devices = %+v, want the one that was paired", list)
+	}
+	log := f.log.String()
+	if strings.Contains(log, "outcome=cancelled") {
+		t.Fatalf("the log calls a pairing that stored a device cancelled:\n%s", log)
+	}
+	if !strings.Contains(log, "outcome=paired") || !strings.Contains(log, "device="+got.device.ID) || !strings.Contains(log, `name="Pixel 8"`) {
+		t.Fatalf("the log does not say which device was paired:\n%s", log)
+	}
+	if strings.Contains(log, code) || strings.Contains(log, started.Code) {
+		t.Fatal("the pairing code is in the log")
 	}
 }

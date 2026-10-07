@@ -8,14 +8,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 )
 
-// ErrNotRunning means nothing answers on the admin socket.
+// ErrNotRunning means nothing answers on the admin socket: there is no
+// socket, or nobody listens on the one that is there.
 var ErrNotRunning = errors.New("the agent is not running on this state folder")
+
+// ErrNoAccess means the admin socket is out of reach for the user who runs
+// the command. It does not say that an agent is running: a state folder
+// that may not be entered hides whether there is a socket in it.
+var ErrNoAccess = errors.New("this user may not use the admin socket of this state folder; run the command as the user the agent runs as")
 
 // ErrStopped means the agent went away while a pairing was pending.
 var ErrStopped = errors.New("the agent stopped before the pairing ended")
@@ -23,13 +31,15 @@ var ErrStopped = errors.New("the agent stopped before the pairing ended")
 // Client talks to a running agent through its admin socket.
 type Client struct {
 	http *http.Client
+	// socket is the path of the admin socket.
+	socket string
 }
 
 // NewClient returns a client for the agent whose state folder is dataDir.
 // It does not create the folder.
 func NewClient(dataDir string) *Client {
 	path := filepath.Join(dataDir, socketName)
-	return &Client{http: &http.Client{Transport: &http.Transport{
+	return &Client{socket: path, http: &http.Client{Transport: &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, "unix", path)
@@ -37,7 +47,25 @@ func NewClient(dataDir string) *Client {
 	}}}
 }
 
+// dialFailure says why the admin socket at path could not be connected to.
+func dialFailure(path string, err error) error {
+	// What the folder says about the socket counts too: where the folder is
+	// missing, Windows fails the connection with an error of the network
+	// that says nothing about a file.
+	_, statErr := os.Stat(path)
+	switch {
+	case errors.Is(err, fs.ErrPermission), errors.Is(statErr, fs.ErrPermission):
+		return ErrNoAccess
+	case errors.Is(err, fs.ErrNotExist), errors.Is(statErr, fs.ErrNotExist), errors.Is(err, connRefused):
+		return ErrNotRunning
+	}
+	return fmt.Errorf("cannot reach the agent on its admin socket: %w", err)
+}
+
 func (c *Client) do(ctx context.Context, method, path string, body any) (*http.Response, error) {
+	if err := checkSocketPath(c.socket); err != nil {
+		return nil, err
+	}
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -54,7 +82,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any) (*http.R
 	if err != nil {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
-			return nil, ErrNotRunning
+			return nil, dialFailure(c.socket, opErr)
 		}
 		return nil, err
 	}
