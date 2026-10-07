@@ -54,8 +54,14 @@ type Authenticator struct {
 // whatever its address has done before: the failures of others behind the
 // same address must not lock it out. Any other request from an address that
 // has failed too often is answered with 429; the shared token is not compared
-// then, so it cannot be guessed at speed. A request that fails is counted
-// against its address, except while that address is blocked.
+// then, so it cannot be guessed at speed.
+//
+// A request that fails is answered with 401 and reported to OnFailure. It is
+// counted against its address only when it presented a bearer token, and not
+// while that address is blocked. A request without a token tests no guess,
+// so counting it would buy nothing and cost a lot: a browser tab left on the
+// port, a monitor or a scanner seen through a proxy would lock out the
+// phones behind the same address.
 func (a *Authenticator) Require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer, hasBearer := bearerToken(r)
@@ -78,7 +84,7 @@ func (a *Authenticator) Require(next http.Handler) http.Handler {
 			a.serve(w, r, state.Device{ID: LegacyDeviceID, Name: "env-token", Role: state.RoleFull}, "", next)
 			return
 		}
-		if a.Limiter != nil {
+		if hasBearer && a.Limiter != nil {
 			a.Limiter.Fail(key)
 		}
 		if a.OnFailure != nil {

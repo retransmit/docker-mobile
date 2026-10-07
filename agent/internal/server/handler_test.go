@@ -484,6 +484,21 @@ func TestAskingWhileNothingIsPendingCountsAgainstTheAddress(t *testing.T) {
 	}
 }
 
+func TestRequestsWithoutATokenDoNotKeepTheirAddressFromPairing(t *testing.T) {
+	f := newFixture(t, "", agentFP)
+	// What a browser tab left on the port sends, twice as often as wrong
+	// tokens it takes to block an address.
+	for i := 0; i < 2*throttle.Threshold; i++ {
+		if rec := f.do("GET", "/favicon.ico", "", nil); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d without a token: code = %d, want 401", i+1, rec.Code)
+		}
+	}
+	p, _, _ := f.pairing.Start(state.RoleFull, "")
+	if rec, _ := f.pair(t, p.Code, agentFP, "Pixel 8"); rec.Code != http.StatusOK {
+		t.Fatalf("a correct proof from that address: code = %d, want 200", rec.Code)
+	}
+}
+
 func TestARequestThatIsCutOffStillGetsItsAccessLine(t *testing.T) {
 	var log bytes.Buffer
 	c := &clock{t: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)}

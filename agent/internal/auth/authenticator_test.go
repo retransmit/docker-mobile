@@ -209,20 +209,27 @@ func TestTenFailuresBlockTheAddressButNotItsPairedDevices(t *testing.T) {
 	}
 }
 
-func TestEveryKindOfFailureIsCountedOnce(t *testing.T) {
+func TestAFailureIsCountedOnceWithATokenAndNotAtAllWithout(t *testing.T) {
 	f := newFixture(t, legacy)
 	known, _, _ := f.devices.Add("phone", state.RoleFull)
 	gone, goneToken, _ := f.devices.Add("old phone", state.RoleFull)
 	if _, ok, err := f.devices.Remove(gone.ID); !ok || err != nil {
 		t.Fatalf("remove: ok = %v, err = %v", ok, err)
 	}
-	cases := []struct{ name, bearer string }{
-		{"no header", ""},
-		{"a wrong scheme", "Basic " + legacy},
-		{"a malformed device token", "Bearer dm1.no-second-dot"},
-		{"an unknown device", "Bearer " + noDevice},
-		{"a wrong secret for a known device", "Bearer dm1." + known.ID + "." + strings.Repeat("A", 43)},
-		{"a removed device", "Bearer " + goneToken},
+	cases := []struct {
+		name, bearer string
+		counted      int // how often the failure counts against the address
+	}{
+		// No bearer token, so no guess that could be counted.
+		{"no header", "", 0},
+		{"a wrong scheme", "Basic " + legacy, 0},
+		{"a bearer scheme without a token", "Bearer ", 0},
+		// A token that was tested and found wrong.
+		{"a wrong shared token", "Bearer nope", 1},
+		{"a malformed device token", "Bearer dm1.no-second-dot", 1},
+		{"an unknown device", "Bearer " + noDevice, 1},
+		{"a wrong secret for a known device", "Bearer dm1." + known.ID + "." + strings.Repeat("A", 43), 1},
+		{"a removed device", "Bearer " + goneToken, 1},
 	}
 	for i, c := range cases {
 		remote := fmt.Sprintf("198.51.100.%d:1000", i+1)
@@ -230,15 +237,34 @@ func TestEveryKindOfFailureIsCountedOnce(t *testing.T) {
 		if rec := f.do(c.bearer, remote); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s: code = %d, want 401", c.name, rec.Code)
 		}
+		// Counted or not, every one of them is reported.
 		if got := f.failed[before:]; len(got) != 1 || got[0] != remote {
 			t.Errorf("%s: failures reported = %q, want one from %s", c.name, got, remote)
 		}
-		if got := f.counted(remote); got != 1 {
-			t.Errorf("%s: %d failures counted, want 1", c.name, got)
+		if got := f.counted(remote); got != c.counted {
+			t.Errorf("%s: %d failures counted, want %d", c.name, got, c.counted)
 		}
 	}
 	if len(f.seen) != 0 {
 		t.Fatalf("the handler ran for %d refused requests", len(f.seen))
+	}
+}
+
+func TestRequestsWithoutATokenDoNotBlockTheAddress(t *testing.T) {
+	f := newFixture(t, legacy)
+	const remote = "203.0.113.7:40000"
+	// Twice as many as wrong tokens it takes to block an address.
+	const requests = 2 * throttle.Threshold
+	for i := 0; i < requests; i++ {
+		if rec := f.do("", remote); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request %d without a token: code = %d, want 401", i+1, rec.Code)
+		}
+	}
+	if len(f.failed) != requests {
+		t.Fatalf("%d failures reported, want %d", len(f.failed), requests)
+	}
+	if rec := f.do("Bearer "+legacy, remote); rec.Code != http.StatusOK {
+		t.Fatalf("the shared token from that address: code = %d, want 200", rec.Code)
 	}
 }
 
